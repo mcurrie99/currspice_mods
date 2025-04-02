@@ -1,6 +1,39 @@
 use std::fs::File;
 use std::error::Error;
 use std::process::{Command, ExitStatus};
+use std::io;
+use reqwest::blocking;
+
+// TODO: Install Implementation
+// It might make sense to move this to Mod and have Fabric hold a Mod object
+// interally so that we can just use that with an abstraction to help the install 
+// of fabric itself.
+pub trait Install {
+    fn get_download(&self) -> &String;
+
+    // Add progress bar to this
+    fn install(&self, dir:&str) -> Result<(), Box<dyn Error>> {
+        // Gets filename from url link
+        let filename = self.extract_name()?;
+
+        // Creates filepath and file
+        let install_location = format!("{}/{}", dir, filename);
+        let mut installer_file = File::create(install_location)?;
+
+        // Tries to download the file
+        let mut response = blocking::get(self.get_download())?;
+        io::copy(&mut response, &mut installer_file)?;
+
+        Ok(())
+    }
+
+    fn extract_name(&self) -> Result<&str, Box<dyn Error>> {
+        // Splits link and grabs last value of the vector
+        let filename = self.get_download()
+            .split('/').last().unwrap();
+        Ok(filename)
+    }
+}
 
 #[allow(dead_code)]
 pub struct Mod {
@@ -55,16 +88,6 @@ impl Mod {
     pub fn remove_loc(&mut self) {
         self.loc = None
     }
-
-    // TODO: Write code to Mod file
-    pub fn download(&mut self) {
-
-    }
-
-    // TODO: Write code to install Mod file
-    pub fn install() {
-
-    }
 }
 
 
@@ -77,13 +100,14 @@ pub struct Fabric {
     // installed: Has Fabric been successfully installed
     installer: File,
     install_name: String,
+    download: String,
     mc_version: String,
     inst_version: String,
     installed: bool
 }
 
 impl Fabric {
-    pub fn new(filename:&str, mc_version:&str, inst_version:&str) -> Result<Fabric, Box<dyn Error>> {
+    pub fn new(filename:&str, mc_version:&str, inst_version:&str, download:&str) -> Result<Fabric, Box<dyn Error>> {
         let file = File::open(filename)?;
         
         Ok(Fabric {
@@ -91,7 +115,8 @@ impl Fabric {
             install_name: String::from(filename),
             mc_version: String::from(mc_version),
             inst_version: String::from(inst_version),
-            installed: false
+            download: String::from(download),
+            installed: false,
         })
     }
 
@@ -105,6 +130,7 @@ impl Fabric {
             install_name: String::from(filename),
             mc_version: String::from(config.get_mc_version()),
             inst_version: String::from(config.get_installer_version()),
+            download: String::from(config.get_fabric_url()),
             installed: false,
         })
     }
@@ -158,10 +184,6 @@ impl Fabric {
         }
     }
 
-    // TODO: Implement downloading for the Fabric installer
-    pub fn download(&mut self) {
-
-    }
 }
 
 #[cfg(test)]

@@ -4,10 +4,7 @@ use std::error::Error;
 
 // Internal Imports
 
-// TODO: Implement YAML
 // Outside Imports
-#[allow(unused_imports)]
-use serde_yaml as ym;
 use serde::{Serialize, Deserialize};
 
 #[allow(dead_code)]
