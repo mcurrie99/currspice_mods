@@ -6,6 +6,10 @@ use std::io::copy;
 // #[cfg(not(target_os = "windows"))]
 // compile_error!("This application only supports Windows");
 
+// Sets up constant for pulling pods to download.
+#[allow(dead_code)]
+const CONFIG_URL: &str = "http://server.currspice.com/mods.yaml";
+
 fn main() {
     let config = mods::config::Config::load_new("mods.yaml").unwrap();
     println!("{:?}", config);
