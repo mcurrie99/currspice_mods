@@ -17,13 +17,16 @@ pub struct Config {
     // server_mods: List of links to download links for server mods
     // user_mods: List of links to download links for user mods
     path: String,
+    mc_version: String,
+    installer_version: String,
     server_mods: Vec<String>,
-    user_mods: Vec<String>
+    user_mods: Vec<String>,
+    fabric: String,
 }
 
 impl Config {
     // Generates New Configuation Object
-    pub fn new(path:&str, server_mods:&[&str], user_mods:&[&str]) -> Config {
+    pub fn new(path:&str, server_mods:&[&str], user_mods:&[&str], mc_version:&str, installer_version:&str, fabric_url:&str) -> Config {
         // Creates Vector of Strings for Server Mods
         let mut server_mods_vec = Vec::with_capacity(server_mods.len());
         for modder in server_mods.iter() {
@@ -41,7 +44,10 @@ impl Config {
         Config {
             path: String::from(path),
             server_mods: server_mods_vec,
-            user_mods: user_mods_vec
+            user_mods: user_mods_vec,
+            mc_version: String::from(mc_version),
+            installer_version: String::from(installer_version),
+            fabric: String::from(fabric_url)
         }
     }
 
@@ -68,6 +74,21 @@ impl Config {
     // Returns Mods from User
     pub fn get_user_mods(&self) -> &Vec<String> {
         &self.user_mods
+    }
+
+    // Returns Fabric Installer URL
+    pub fn get_fabric_url(&self) -> &String {
+        &self.fabric
+    }
+
+    // Returns requested minecraft version
+    pub fn get_mc_version(&self) -> &String {
+        &self.mc_version
+    }
+
+    // Returns requested installer version
+    pub fn get_installer_version(&self) -> &String {
+        &self.installer_version
     }
 
     // Changes players Minecraft install path
@@ -103,7 +124,7 @@ mod tests {
     #[test]
     fn test_config_sets() {
         // Test Generation of the yaml file
-        let mut test_config = Config::new("Wrong", &vec!["Wrong"], &vec!["Wrong"]);
+        let mut test_config = Config::new("Wrong", &vec!["Wrong"], &vec!["Wrong"], "Wrong", "Wrong", "Wrong");
 
         let test_path = String::from("Correct");
         let test_server_mods = vec![String::from("Server Mod 1"), String::from("Server Mod 2")];
@@ -137,7 +158,10 @@ mod tests {
         let config = Config::new(
             &test_path, 
             &test_server_mods, 
-            &test_user_mods
+            &test_user_mods,
+        "TODO",
+             "TODO",
+            "TODO",
         );
 
         // Checks if values were created properly

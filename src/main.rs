@@ -8,21 +8,29 @@ use std::io::copy;
 
 fn main() {
     let config = mods::config::Config::load_new("mods.yaml").unwrap();
-
     println!("{:?}", config);
 
+    // Guesses initial path to minecraft install
     // let test = mods::tools::guess_minecraft_dir().unwrap();
+    // println!("{test}");
 
     // Grabs URL
-    let url = config.get_server_mods().get(0).unwrap();
-    println!("Url: {url}");
+    for (i, modder) in config.get_server_mods().iter().enumerate() {
+        println!("Mod {i}: {modder}");
+    }
 
+    // TEST SECTION
+    // ---------------------------------------------------------------------------------------
+    let mut response = get(config.get_fabric_url()).unwrap();
 
-    let mut response = get(url).unwrap();
+    // TODO: Write code to download file for us
+    let installer = "fabric-installer.jar";
+    let mut installer_file = File::create(installer).unwrap();
+    copy(&mut response, &mut installer_file).unwrap();
 
-    let mut file = File::create("downloaded_file.jar").unwrap();
-
-    copy(&mut response, &mut file).unwrap();
+    // Tries to install fabric
+    let mut fabric = mods::mods::Fabric::from_config(installer, &config).unwrap();
+    let _ = fabric.install(config.get_path()).unwrap();
 
     println!("File downloaded successfully");
 }
