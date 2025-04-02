@@ -1,7 +1,10 @@
+use std::fs::File;
+
 #[allow(dead_code)]
 pub struct Mod {
     name: String,
     download: String,
+    loc: Option<File>,
 }
 
 // TODO: Check if download link is valid
@@ -9,7 +12,8 @@ impl Mod {
     pub fn new(name:&str, download:&str) -> Mod {
         Mod {
             name:String::from(name),
-            download:String::from(download)
+            download:String::from(download),
+            loc:None,
         }
     }
 
@@ -21,12 +25,27 @@ impl Mod {
         &self.download
     }
 
+    pub fn get_loc(&self) -> Option<&File> {
+        match &self.loc {
+            Some(file) => Some(&file),
+            None => None
+        }
+    }
+
     pub fn set_name(&mut self, new_name:&str) {
         self.name = String::from(new_name);
     }
 
     pub fn set_download(&mut self, new_download:&str) {
         self.download = String::from(new_download);
+    }
+
+    pub fn set_loc(&mut self, new_loc:File) {
+        self.loc = Some(new_loc)
+    }
+
+    pub fn remove_loc(&mut self) {
+        self.loc = None
     }
 }
 
