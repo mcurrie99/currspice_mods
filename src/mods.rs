@@ -124,6 +124,10 @@ impl Fabric {
         &self.inst_version
     }
 
+    pub fn download(&mut self) -> Result<(), Box<dyn Error>> {
+        self.fabric.download()
+    }
+
     pub fn run_installer(&mut self, mc_path:&str) -> Result<ExitStatus, Box<dyn Error>> {
         // Runs
         let status = Command::new("java")
