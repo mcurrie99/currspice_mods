@@ -1,39 +1,7 @@
-use std::fs::File;
+use std::fs;
 use std::error::Error;
 use std::process::{Command, ExitStatus};
-use std::io;
 use reqwest::blocking;
-
-// TODO: Install Implementation
-// It might make sense to move this to Mod and have Fabric hold a Mod object
-// interally so that we can just use that with an abstraction to help the install 
-// of fabric itself.
-pub trait Install {
-    fn get_download(&self) -> &String;
-
-    // Add progress bar to this
-    fn install(&self, dir:&str) -> Result<(), Box<dyn Error>> {
-        // Gets filename from url link
-        let filename = self.extract_name()?;
-
-        // Creates filepath and file
-        let install_location = format!("{}/{}", dir, filename);
-        let mut installer_file = File::create(install_location)?;
-
-        // Tries to download the file
-        let mut response = blocking::get(self.get_download())?;
-        io::copy(&mut response, &mut installer_file)?;
-
-        Ok(())
-    }
-
-    fn extract_name(&self) -> Result<&str, Box<dyn Error>> {
-        // Splits link and grabs last value of the vector
-        let filename = self.get_download()
-            .split('/').last().unwrap();
-        Ok(filename)
-    }
-}
 
 #[allow(dead_code)]
 pub struct Mod {
@@ -43,19 +11,25 @@ pub struct Mod {
     // installed: boolean representing if the mod has been installed.
     name: String,
     download: String,
-    loc: Option<File>,
-    installed: bool
+    path: String,
+    installed: bool,
 }
 
 // TODO: Check if download link is valid
 impl Mod {
-    pub fn new(name:&str, download:&str) -> Mod {
-        Mod {
-            name:String::from(name),
+    pub fn new(download:&str, directory:&str) -> Result<Mod, Box<dyn Error>> {
+        // Obtains filename
+        // This only support .jar files
+        let filename = Mod::extract_name(download).unwrap_or_else(|| "Mod File.jar");
+        let path = format!("{}/{}", directory, filename);
+
+        // Creates Mod Object
+        Ok(Mod {
+            name:String::from(filename),
             download:String::from(download),
-            loc:None,
+            path: path,
             installed: false,
-        }
+        })
     }
 
     pub fn get_name(&self) -> &String {
@@ -66,13 +40,6 @@ impl Mod {
         &self.download
     }
 
-    pub fn get_loc(&self) -> Option<&File> {
-        match &self.loc {
-            Some(file) => Some(&file),
-            None => None
-        }
-    }
-
     pub fn get_mut_name(&mut self) -> &mut String {
         &mut self.name
     }
@@ -81,12 +48,31 @@ impl Mod {
         &mut self.download
     }
 
-    pub fn get_mut_loc(&mut self, new_loc:File) {
-        self.loc = Some(new_loc)
+    pub fn extract_name(link: &str) -> Option<&str> {
+        let filename = link.split('/').last()?;
+        Some(filename)
     }
 
-    pub fn remove_loc(&mut self) {
-        self.loc = None
+    // Downloads mod and creates file
+    pub fn download(&mut self) -> Result<(), Box<dyn Error>> {
+        // Attempts to download file
+        let response = blocking::get(&self.download)?;
+        let content = response.bytes()?;
+
+        // Installs file
+        fs::write(&self.path, &content)?;
+        self.installed = true;
+        Ok(())
+    }
+
+    // Deletes mod
+    pub fn delete(&mut self) -> Result<(), Box<dyn Error>> {
+        // Attempts to remove file
+        fs::remove_file(&self.path)?;
+
+        // Sets installed status to false
+        self.installed = false;
+        Ok(())
     }
 }
 
@@ -98,51 +84,34 @@ pub struct Fabric {
     // mc_version: Version of minecraft of the requested values
     // inst_version: Installer Version of Fabric
     // installed: Has Fabric been successfully installed
-    installer: File,
-    install_name: String,
-    download: String,
+  
     mc_version: String,
     inst_version: String,
-    installed: bool
+    fabric: Mod,
 }
 
 impl Fabric {
-    pub fn new(filename:&str, mc_version:&str, inst_version:&str, download:&str) -> Result<Fabric, Box<dyn Error>> {
-        let file = File::open(filename)?;
+    pub fn new(mc_version:&str, inst_version:&str, download:&str, directory:&str) -> Result<Fabric, Box<dyn Error>> {
+        // Creates mod object to handle install
+        let modder = Mod::new(download, directory)?;
         
         Ok(Fabric {
-            installer: file,
-            install_name: String::from(filename),
             mc_version: String::from(mc_version),
             inst_version: String::from(inst_version),
-            download: String::from(download),
-            installed: false,
+            fabric: modder,
         })
     }
 
-    pub fn from_config(filename:&str, config:&crate::config::Config) -> Result<Fabric, Box<dyn Error>> {
-        // Attempts to open file
-        let file = File::open(filename)?;
+    pub fn from_config(config:&crate::config::Config) -> Result<Fabric, Box<dyn Error>> {
+        // Creates mod object to handle install
+        let modder = Mod::new(&config.get_fabric_url(), config.get_path())?;
 
         // Returns Ok enum if file was successfully accesssed
         Ok(Fabric {
-            installer: file,
-            install_name: String::from(filename),
             mc_version: String::from(config.get_mc_version()),
             inst_version: String::from(config.get_installer_version()),
-            download: String::from(config.get_fabric_url()),
-            installed: false,
+            fabric: modder,
         })
-    }
-
-    // Returns referent to the installer file
-    pub fn get_installer(&self) -> &File {
-        &self.installer
-    }
-
-    // Returns reference to the installer name string
-    pub fn get_install_name(&self) -> &String {
-        &self.install_name
     }
 
     // Returns reference to the requested minecraft install version
@@ -155,17 +124,12 @@ impl Fabric {
         &self.inst_version
     }
 
-    // Returns reference to installed boolean
-    pub fn get_installed(&self) -> &bool {
-        &self.installed
-    }
-
-    pub fn install(&mut self, mc_path:&str) -> Result<ExitStatus, Box<dyn Error>> {
+    pub fn run_installer(&mut self, mc_path:&str) -> Result<ExitStatus, Box<dyn Error>> {
         // Runs
         let status = Command::new("java")
         .args(&[
             "-jar",
-            &self.install_name,
+            &self.fabric.name,
             "client",
             "-dir",
             mc_path,
@@ -177,25 +141,26 @@ impl Fabric {
 
         // Sets installed to ok
         if status.success() {
-            self.installed = true;
+            self.fabric.installed = true;
             Ok(status)
         } else {
             Err("Failed to Install Fabric".into())
         }
     }
-
 }
 
+// TODO: Fix Tests
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn test_mod() {
-        let name = "Google";
-        let download = "google.com";
+        let name = "mod.jar";
+        let download = "google.com/mod.jar";
+        let directory = "C:/test";
 
-        let modder = Mod::new(&name, &download);
+        let modder = Mod::new(download, directory).unwrap();
         
         assert_eq!(name, modder.get_name());
         assert_eq!(download, modder.get_download())
@@ -205,9 +170,10 @@ mod test {
     fn test_mod_set() {
         let name = "Google";
         let download = "google.com";
+        let directory = "C:/test";
 
         // Creates Mod Object
-        let mut modder = Mod::new("Wrong", "Wrong");
+        let mut modder = Mod::new("google.com/Wrong.jar", directory).unwrap();
 
         // Edits Values
         { // Mutates the name of the website
