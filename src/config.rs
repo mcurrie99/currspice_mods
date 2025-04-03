@@ -1,13 +1,11 @@
 // Standard Library Imports
-use std::fs::File;
+use std::fs::{self, File};
 use std::error::Error;
+use reqwest::blocking;
 
 // Internal Imports
 
-// TODO: Implement YAML
 // Outside Imports
-#[allow(unused_imports)]
-use serde_yaml as ym;
 use serde::{Serialize, Deserialize};
 
 #[allow(dead_code)]
@@ -58,6 +56,17 @@ impl Config {
         let config: Config = serde_yaml::from_reader(file)?;
 
         // Returns created Object
+        Ok(config)
+    }
+
+    pub fn download_new(filepath:&str, link:&str) -> Result<Config, Box<dyn Error>> {
+        // Downloads File
+        let response = blocking::get(link)?;
+        let content = response.bytes()?;
+
+        // Install file
+        fs::write(filepath, &content)?;
+        let config = Config::load_new(filepath)?;
         Ok(config)
     }
 
