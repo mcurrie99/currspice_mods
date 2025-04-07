@@ -130,18 +130,22 @@ impl Fabric {
 
     pub fn run_installer(&mut self, mc_path:&str) -> Result<ExitStatus, Box<dyn Error>> {
         // Runs
-        let status = Command::new("java")
-        .args(&[
-            "-jar",
-            &self.fabric.path,
-            "client",
-            "-dir",
-            mc_path,
-            "-mcversion",
-            &self.mc_version,
-            "-loader",
-            &self.inst_version,
-        ]).status()?;
+        // Java Installation
+        // let status = Command::new("java")
+        // .args(&[
+        //     "-jar",
+        //     &self.fabric.path,
+        //     "client",
+        //     "-dir",
+        //     mc_path,
+        //     "-mcversion",
+        //     &self.mc_version,
+        //     "-loader",
+        //     &self.inst_version,
+        // ]).status()?;
+
+        println!("{}", self.fabric.path);
+        let status = Command::new(&self.fabric.path).status()?;
 
         // Sets installed to ok
         if status.success() {

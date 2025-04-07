@@ -29,6 +29,7 @@ fn main() {
                 Ok(config) => config,
                 _ => {
                     println!("Currspice: Could not download configuration file");
+                    end();
                     process::exit(1)
                 },
             }
@@ -41,6 +42,7 @@ fn main() {
         Ok(dir) => dir,
         _ => {
             println!("Currspice: Non-default minecraft directory detected, create issue ticket");
+            end();
             process::exit(1)
         },
     };
@@ -52,6 +54,7 @@ fn main() {
         Ok(fabric) => fabric,
         _ => {
             println!("Currspice: Could not create Fabric Object");
+            end();
             process::exit(1)
         }
     };
@@ -62,6 +65,7 @@ fn main() {
         Err(e) => {
             println!("Currspice: Could not download fabric file");
             println!("Currspice ERROR: {}", e);
+            end();
             process::exit(1)
         }
     };
@@ -69,8 +73,10 @@ fn main() {
     // Runs Fabric Installer
     match fabric.run_installer(config.get_path()) {
         Ok(_) => (),
-        _ => {
+        Err(e) => {
+            println!("Currspice ERROR: {}", e);
             println!("Currspice: Could not run installer");
+            end();
             process::exit(1)
         }
     };
@@ -92,6 +98,7 @@ fn main() {
             Ok(_) => (),
             _ => {
                 println!("Currspice: Could not create mods directory");
+                end();
                 process::exit(1)
             }
        };
@@ -104,6 +111,7 @@ fn main() {
             Ok(modder) => modder,
             _ => {
                 println!("Currspice: Could not crate mod object");
+                end();
                 process::exit(1);
             }
         };
@@ -114,6 +122,7 @@ fn main() {
             Ok(_) => (),
             _ => {
                 println!("Currspice: Could not download file");
+                end();
                 process::exit(1)
             }
         };
@@ -134,7 +143,12 @@ fn main() {
     println!("Currspice: File downloaded successfully");
 
     // Finishes up process to let user read console
-    println!("Press any key to continue...");
+    end();
+
+}
+
+fn end() {
+    println!("Press Enter key to continue...");
     io::stdout().flush().unwrap();
     let mut input = String::new();
     io::stdin().read_line(&mut input).unwrap();
