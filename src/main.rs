@@ -1,73 +1,155 @@
+// Crate Imports
 use currspice_mods::mods::Fabric;
 use currspice_mods as mods;
 
-use std::thread;
-use std::time::Duration;
-
-// #[cfg(not(target_os = "windows"))]
-// compile_error!("This application only supports Windows");
+// Standard Library Imports
+use std::fs;
+use std::process;
+use std::path;
+use std::io::{self, Write};
 
 // Sets up constant for pulling pods to download.
 #[allow(dead_code)]
 const CONFIG_URL: &str = r"http://server.currspice.com/mods.yaml";
 
+// TODO: List for getting release build done
+// - Implement selecting directory (maybe should be its own ticket)
+// - Implement checking if directory exists
+// - Install everything in correct locations
+
 fn main() {
     // Attempts to open configuration file
-    println!("Reading Config File");
+    println!("Currspice: Reading Config File");
     let filepath = r"./mods.yaml";
-    let config = match mods::config::Config::load_new(filepath) {
+    let mut config = match mods::config::Config::load_new(filepath) {
         Ok(config) => config,
         _ => {
-            println!("Config File not found, downloading...");
-            mods::config::Config::download_new(filepath, CONFIG_URL).unwrap()
+            println!("Currspice: Config File not found, downloading...");
+            match mods::config::Config::download_new(filepath, CONFIG_URL) {
+                Ok(config) => config,
+                _ => {
+                    println!("Currspice: Could not download configuration file");
+                    end();
+                    process::exit(1)
+                },
+            }
         },
     };
-    println!("Configuration File Initialized...");
+    println!("Currspice: Configuration File Initialized...");
 
-    // Guesses initial path to minecraft install
-    // let test = mods::tools::guess_minecraft_dir().unwrap();
-    // println!("{test:?}");
-
+    // Guesses directory and tries to open it
+    let minecraft = match mods::tools::guess_minecraft_dir() {
+        Ok(dir) => dir,
+        _ => {
+            println!("Currspice: Non-default minecraft directory detected, create issue ticket");
+            end();
+            process::exit(1)
+        },
+    };
+    config.set_path(minecraft);
 
     // Fabric Install
-    println!("Downloading Fabric...");
-    // let mut fabric = Fabric::from_config(&config).unwrap();
-    let directory = r"./fabric";
-    let mc_version = config.get_mc_version();
-    let inst_version = config.get_installer_version();
-    let fabric_link = config.get_fabric_url();
-    let mut fabric = Fabric::new(mc_version, inst_version, fabric_link, directory).unwrap();
-    fabric.download().unwrap();
+    println!("Currspice: Downloading Fabric...");
+    let mut fabric =  match Fabric::from_config(&config){
+        Ok(fabric) => fabric,
+        _ => {
+            println!("Currspice: Could not create Fabric Object");
+            end();
+            process::exit(1)
+        }
+    };
+
+    // Attempts to download fabric installer
+    match fabric.download() {
+        Ok(_) => (),
+        Err(e) => {
+            println!("Currspice: Could not download fabric file");
+            println!("Currspice ERROR: {}", e);
+            end();
+            process::exit(1)
+        }
+    };
+    
+    // Runs Fabric Installer
+    match fabric.run_installer(config.get_path()) {
+        Ok(_) => (),
+        Err(e) => {
+            println!("Currspice ERROR: {}", e);
+            println!("Currspice: Could not run installer");
+            end();
+            process::exit(1)
+        }
+    };
 
     // Downloads Mods
     // -------------------------------------------------------------------------------------
-    // Temporary Directory
-    let mods_directory = "./mods";
+    // Mods Directory
+    let mods_directory = format!(r"{}\{}", config.get_path(), "mods");
 
     // Creates Array of Mods
     let mut mods: Vec<currspice_mods::mods::Mod> = Vec::with_capacity(config.get_server_mods().len());
+
+    // TODO: Move to own function or check for installer
+    let test = path::Path::new(&mods_directory).exists();
+
+    // Checks to see if mods folder exists and if not will create folder
+    if !test {
+        match fs::create_dir(&mods_directory) {
+            Ok(_) => (),
+            _ => {
+                println!("Currspice: Could not create mods directory");
+                end();
+                process::exit(1)
+            }
+       };
+    }
     
     // Grabs URL
     for (i, link) in config.get_server_mods().iter().enumerate() {
-        // Creates Mod Object        
-        let mut modder = currspice_mods::mods::Mod::new(link, mods_directory).unwrap();
+        // Creates Mod Object     
+        let mut modder = match currspice_mods::mods::Mod::new(link, &mods_directory) {
+            Ok(modder) => modder,
+            _ => {
+                println!("Currspice: Could not crate mod object");
+                end();
+                process::exit(1);
+            }
+        };
+        println!("Currspice Downloading Mod {i}: {}", modder.get_name());
 
-        println!("Downloading Mod {i}: {}", modder.get_name());
+        // Downloads and installes mod
+        match modder.download() {
+            Ok(_) => (),
+            _ => {
+                println!("Currspice: Could not download file");
+                end();
+                process::exit(1)
+            }
+        };
 
-        // Downloads mod
-        modder.download().unwrap();
+        // Adds mod to vector
         mods.push(modder);
     }
 
-    // // Sleeps for 2 seconds
-    // println!("Sleeping for 2 seconds");
-    // thread::sleep(Duration::from_secs(2));
+    // Deletes farbic installer
+    match fabric.delete() {
+        Ok(_) => (),
+        _ => {
+            println!("Currspice: Failed to delete fabric installer");
+            process::exit(1)
+        }
+    };
 
-    // // Deletes files
-    // println!("Deleting Files");
-    // for modder in mods.iter_mut() {
-    //     modder.delete().unwrap();
-    // }
-    // println!("Successfully deleted files");
-    println!("File downloaded successfully");
+    println!("Currspice: File downloaded successfully");
+
+    // Finishes up process to let user read console
+    end();
+
+}
+
+fn end() {
+    println!("Press Enter key to continue...");
+    io::stdout().flush().unwrap();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
 }

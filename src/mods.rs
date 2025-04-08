@@ -21,7 +21,7 @@ impl Mod {
         // Obtains filename
         // This only support .jar files
         let filename = Mod::extract_name(download).unwrap_or_else(|| "Mod File.jar");
-        let path = format!("{}/{}", directory, filename);
+        let path = format!(r"{}\{}", directory, filename);
 
         // Creates Mod Object
         Ok(Mod {
@@ -130,18 +130,22 @@ impl Fabric {
 
     pub fn run_installer(&mut self, mc_path:&str) -> Result<ExitStatus, Box<dyn Error>> {
         // Runs
-        let status = Command::new("java")
-        .args(&[
-            "-jar",
-            &self.fabric.name,
-            "client",
-            "-dir",
-            mc_path,
-            "-mcversion",
-            &self.mc_version,
-            "-loader",
-            &self.inst_version,
-        ]).status()?;
+        // Java Installation
+        // let status = Command::new("java")
+        // .args(&[
+        //     "-jar",
+        //     &self.fabric.path,
+        //     "client",
+        //     "-dir",
+        //     mc_path,
+        //     "-mcversion",
+        //     &self.mc_version,
+        //     "-loader",
+        //     &self.inst_version,
+        // ]).status()?;
+
+        println!("{}", self.fabric.path);
+        let status = Command::new(&self.fabric.path).status()?;
 
         // Sets installed to ok
         if status.success() {
@@ -150,6 +154,11 @@ impl Fabric {
         } else {
             Err("Failed to Install Fabric".into())
         }
+    }
+
+    pub fn delete(&mut self) -> Result<(), Box<dyn Error>> {
+        self.fabric.delete()?;
+        Ok(())
     }
 }
 
