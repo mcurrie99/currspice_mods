@@ -10,7 +10,6 @@ use std::io::{self, Write};
 
 // Sets up constant for pulling pods to download.
 #[allow(dead_code)]
-const CONFIG_URL: &str = r"http://server.currspice.com/mods.yaml";
 
 // TODO: List for getting release build done
 // - Implement selecting directory (maybe should be its own ticket)
@@ -25,7 +24,7 @@ fn main() {
         Ok(config) => config,
         _ => {
             println!("Currspice: Config File not found, downloading...");
-            match mods::config::Config::download_new(filepath, CONFIG_URL) {
+            match mods::config::Config::download_new(filepath, currspice_mods::CONFIG_URL) {
                 Ok(config) => config,
                 _ => {
                     println!("Currspice: Could not download configuration file");
@@ -80,6 +79,19 @@ fn main() {
             process::exit(1)
         }
     };
+
+    // Updates Fabric Installer
+    println!("Currspice: Updated Launcher Profile Settings (NOT RUNNING)");
+    let mc_alloc = currspice_mods::tools::determine_ram_alloc(2.0);
+    match config.edit_profile(mc_alloc) {
+        Ok(_) => (),
+        Err(e) => {
+            println!("Currspice ERROR: {}", e);
+            println!("Currspice: Could not edit launcher profile json file.");
+            end();
+            process::exit(1);
+        }
+    }
 
     // Downloads Mods
     // -------------------------------------------------------------------------------------

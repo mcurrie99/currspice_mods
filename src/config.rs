@@ -122,6 +122,54 @@ impl Config {
     
         Ok(())
     }
+
+    pub fn edit_profile(&self, alloc:u64) -> Result<(), Box<dyn Error>> {
+    
+        // Determines the profile path
+        let profile_path = format!(r"{}\launcher_profiles.json", self.get_path());
+        println!("Launcher Profiles Directory: {profile_path}");
+        let profiles_str = fs::read_to_string(&profile_path)?;
+        let mut profiles: serde_json::Value = serde_json::from_str(&profiles_str)?;
+
+        // Pulls Java Arguments
+        // NOTE: By default, the JVM arguments are not included into the launcher profile, so these will need to be added manually
+        let fabric_name = format!("fabric-loader-{}", self.mc_version);
+        let args_str = profiles["profiles"][&fabric_name]["javaArgs"].as_str().unwrap_or_else(|| crate::JVM_ARGS);
+
+        // Creates new argument
+        let new_ram_alloc = format!("Xmx{alloc}G ");
+        println!("New Argument Insert: {new_ram_alloc}");
+
+        // Edits argument
+        let mut args: Vec<&str> = args_str.split("-").collect();
+
+        // Replaces Value in argument String
+        if let Some(arg) = args.iter_mut().find(|arg| arg.contains("Xmx")) {
+            *arg = new_ram_alloc.as_str();
+        } else {
+            // Default use
+            args.push(&new_ram_alloc);
+        }
+
+        // Rejoins the arguments
+        let new_arg = args.join("-");
+        println!("New Argument Line: {new_arg}");
+
+        // Inserts new argument back into function
+        profiles["profiles"][&fabric_name]["javaArgs"] = serde_json::Value::String(new_arg);
+
+        // Updates Icon and Name
+        profiles["profiles"][&fabric_name]["icon"] = serde_json::Value::String(String::from(crate::LOGO));
+        profiles["profiles"][&fabric_name]["name"] = serde_json::Value::String(String::from(crate::PROFILE_NAME));
+
+        // Updates file
+        let update = serde_json::to_string_pretty(&profiles)?;
+        fs::write(&profile_path, update)?;
+
+        // Returns Ok if successful
+        Ok(())
+    }
+
 }
 
 
