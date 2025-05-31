@@ -1,3 +1,4 @@
+#[cfg(windows)]
 fn main() {
     let mut res = winres::WindowsResource::new();
 
@@ -5,4 +6,9 @@ fn main() {
     res.set_icon("icon.ico");
 
     res.compile().expect("Failed to compile resources");
+}
+
+#[cfg(not(windows))]
+fn main() {
+    
 }
