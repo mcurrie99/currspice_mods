@@ -6,12 +6,22 @@ pub const CONFIG_URL: &str = r"http://server.currspice.com/mods.yaml";
 pub const PROFILE_NAME: &str = "Currspice SMP";
 pub const JVM_ARGS: &str = "-Xmx2G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M";
 
+// Configuration specific constantsf (Keep Internal to program for now)
+#[cfg(target_os = "windows")]
+const JAVA_CHECK_CMD: &str = "where";
+
+#[cfg(not(target_os = "windows"))]
+const JAVA_CHECK_CMD: &str = "which";
+
 pub mod tools {
     // Standard Library Imports
+    use std::process::Command;
     use std::path;
     use std::env;
     use std::error::Error;
     use sysinfo::System;
+
+    use crate::JAVA_CHECK_CMD;
 
 
     // Guesses Minecraft Directory
@@ -47,5 +57,15 @@ pub mod tools {
 
         // Returns allocation
         mc_alloc
+    }
+
+    #[allow(dead_code)]
+    pub fn check_java_install() -> bool {
+        // Runs command to determine if java is installed
+        Command::new(JAVA_CHECK_CMD)
+        .arg("java")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
     }
 }
