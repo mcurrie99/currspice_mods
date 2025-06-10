@@ -168,8 +168,9 @@ use std::io::{self, Write};
 
 fn main() {
     let check = currspice_mods::tools::check_java_install();
+    println!("Matt is the best!");
     println!("Is Java Installed: {}", check);
 }
 
-// Determines if wsl is installedo nteh machine
+// Determines if wsl is installed on the machine
 
