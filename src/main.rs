@@ -168,8 +168,27 @@ use std::io::{self, Write};
 
 fn main() {
     let check = currspice_mods::tools::check_java_install();
-    println!("Matt is the best!");
     println!("Is Java Installed: {}", check);
+
+    // Installer Logic for Java
+    download_java_installer();
+}
+
+fn download_java_installer() {
+    println!("Please Install Java onto you machine");
+    if cfg!(target_os = "windows") {
+        println!("CURRSPICE: Downloading Java for Windows...");
+        // Here you would implement the logic to download the Java installer for Windows
+        process::Command()
+    } else if cfg!(target_os = "macos") {
+        println!("CURRSPICE: Downloading Java for macOS...");
+        // Here you would implement the logic to download the Java installer for macOS
+    } else if cfg!(target_os = "linux") {
+        println!("CURRSPICE: Downloading Java for Linux...");
+        // Here you would implement the logic to download the Java installer for Linux
+    } else {
+        println!("CURRSPICE: Unsupported OS for Java installation.");
+    }
 }
 
 // Determines if wsl is installed on the machine
