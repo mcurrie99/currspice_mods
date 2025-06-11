@@ -1,0 +1,80 @@
+// External Imports
+use std::process;
+use std::fs;
+use std::error::Error;
+
+// This file is going to handle the java installation process if it is needed as handling the
+// OS system types will be annoying and having this in one location to run will make this 
+// significatnly easier (just abstract this annoying stuff into oblivion and hope it doenst fail)
+pub struct Java {
+    installed:bool, // Is java installed on the machine, this will be checked on initialization of object
+}
+
+
+#[cfg(target_os = "windows")]
+fn install_java() -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+
+#[cfg(target_os = "macos")]
+fn install_java() -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn install_java() -> Result<(), Box<dyn Error>> {
+  let os_release = fs::read_to_string("/etc/os-release")?;
+  let id = os_release
+    .lines()
+    .find(|l| l.starts_with("ID="))
+    .and_then(|l| l.split('=').nth(1))
+    .unwrap_or("")
+    .trim_matches('"');
+
+  match id {
+      "debian" | "ubuntu" | "raspbian" => {
+          run(&["apt", "update"])?;
+          run(&["apt", "install", "-y", "openjdk-17-jdk"])?;
+      }
+      "fedora" | "rhel" | "centos" => {
+          run(&["dnf", "install", "-y", "java-17-openjdk"])?;
+      }
+      "arch" | "manjaro" => {
+          run(&["pacman", "-Sy", "--noconfirm", "jdk17-openjdk"])?;
+      }
+      _ => {
+          eprintln!("Unsupported distro: {id}. Please install Java manually.");
+      }
+    }
+
+    Ok(())
+}
+
+
+#[allow(dead_code)]
+pub fn check_java_install() -> bool {
+    // Runs command to determine if java is installed
+    // Command::new(JAVA_CHECK_CMD)
+    // .arg("java")
+    // .output()
+    // .map(|output| output.status.success())
+    // .unwrap_or(false)
+
+    // New way of checking for java
+    process::Command::new("java")
+        .arg("--version")
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    }
+
+fn run(cmd: &[&str]) -> anyhow::Result<()> {
+    let status = process::Command::new(cmd[0]).args(&cmd[1..]).status()?;
+    if !status.success() {
+        anyhow::bail!("command {:?} failed", cmd);
+    }
+    Ok(())
+}
