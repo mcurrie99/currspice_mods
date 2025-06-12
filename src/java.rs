@@ -2,6 +2,7 @@
 use std::process;
 use std::fs;
 use std::error::Error;
+use std::io;
 
 // This file is going to handle the java installation process if it is needed as handling the
 // OS system types will be annoying and having this in one location to run will make this 
@@ -13,7 +14,45 @@ pub struct Java {
 
 #[cfg(target_os = "windows")]
 fn install_java() -> Result<(), Box<dyn Error>> {
-    Ok(())
+     // Confirm that winget itself is present (ships with modern Windows).
+    let winget_found = process::Command::new("cmd")
+        .args(["/C", "where winget"])
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .status()?
+        .success();
+
+    if !winget_found {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "winget is not installed – cannot install Java automatically",
+        ));
+    }
+
+    // 3️⃣ Kick off a silent Temurin 17+ JDK install.
+    //    -e = exact ID match
+    //    --accept-* = skip the interactive license prompts
+    println!("⬇ Installing Eclipse Temurin 17 JDK via winget …");
+    let status = process::Command::new("cmd")
+        .args([
+            "/C",
+            "winget",
+            "install",
+            "--id",
+            "EclipseAdoptium.Temurin.17.JDK",
+            "-e",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ])
+        .status()?;
+
+    if status.success() {
+        println!("✅ Java installed successfully.");
+        Ok(())
+    } else {
+        Err(format!("Java installation failed (winget exit code {status})"))
+    }
 }
 
 
