@@ -1,15 +1,10 @@
 // External Imports
 use std::process;
-use std::fs;
 use std::error::Error;
-use std::io;
 
 // This file is going to handle the java installation process if it is needed as handling the
 // OS system types will be annoying and having this in one location to run will make this 
 // significatnly easier (just abstract this annoying stuff into oblivion and hope it doenst fail)
-pub struct Java {
-    installed:bool, // Is java installed on the machine, this will be checked on initialization of object
-}
 
 
 #[cfg(target_os = "windows")]

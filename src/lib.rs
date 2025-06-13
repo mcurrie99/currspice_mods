@@ -29,19 +29,29 @@ pub mod tools {
     // Guesses Minecraft Directory
     #[allow(dead_code)]
     pub fn guess_minecraft_dir() -> Result<String, Box<dyn Error>> {
-            // Checks that Windows is the OS
-            let username = env::var("USERNAME")?;
+        // Checks that Windows is the OS
+        let username = env::var("USERNAME")?;
 
-            // Use different environment variables based on the OS
-            let guess = format!(r"C:\Users\{username}\AppData\Roaming\.minecraft");
+        let guess: String;
+        // Use different environment variables based on the OS
+        if cfg!(target_os = "windows") {
+            guess = format!(r"C:\Users\{username}\AppData\Roaming\.minecraft");
+        } else if cfg!(target_os = "linux") {
+            guess = format!(r"/home/{username}/.minecraft");
+        } else if cfg!(target_os = "macos") {
+            guess = format!(r"/Users/{username}/Library/Application Support/minecraft");
+        } else {
+            return Err("Unsupported operating system".into());
+        }
 
-            // Checks existance of directory
-            let check = path::Path::new(&guess);
-            if check.exists() && check.is_dir() {
-                Ok(guess)
-            } else {
-                Err(format!("Minecraft Directory does not exist at {}", guess).into())
-            }
+
+        // Checks existance of directory
+        let check = path::Path::new(&guess);
+        if check.exists() && check.is_dir() {
+            Ok(guess)
+        } else {
+            Err(format!("Minecraft Directory does not exist at {}", guess).into())
+        }
     }
 
     #[allow(dead_code)]
