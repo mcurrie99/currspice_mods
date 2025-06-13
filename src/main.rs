@@ -167,7 +167,12 @@ use std::io::{self, Write};
 // }
 
 fn main() {
-//   let _ = install_java_linux();
+  let _ = currspice_mods::java::install_java();
+
+  process::Command::new("java")
+    .arg("--version")
+    .status()
+    .unwrap();
 }
 
 fn run(cmd: &[&str]) -> anyhow::Result<()> {

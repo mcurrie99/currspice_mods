@@ -13,7 +13,7 @@ pub struct Java {
 
 
 #[cfg(target_os = "windows")]
-fn install_java() -> Result<(), Box<dyn Error>> {
+pub fn install_java() -> Result<(), Box<dyn Error>> {
      // Confirm that winget itself is present (ships with modern Windows).
     let winget_found = process::Command::new("cmd")
         .args(["/C", "where winget"])
@@ -23,10 +23,7 @@ fn install_java() -> Result<(), Box<dyn Error>> {
         .success();
 
     if !winget_found {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "winget is not installed – cannot install Java automatically",
-        ));
+        return Err(String::from("winget is not installed - cannot install Java automatically").into());
     }
 
     // 3️⃣ Kick off a silent Temurin 17+ JDK install.
@@ -51,13 +48,13 @@ fn install_java() -> Result<(), Box<dyn Error>> {
         println!("✅ Java installed successfully.");
         Ok(())
     } else {
-        Err(format!("Java installation failed (winget exit code {status})"))
+        Err(format!("Java installation failed (winget exit code {status})").into())
     }
 }
 
 
 #[cfg(target_os = "macos")]
-fn install_java() -> Result<(), Box<dyn Error>> {
+pub fn install_java() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
