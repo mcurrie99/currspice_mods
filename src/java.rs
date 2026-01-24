@@ -102,10 +102,10 @@ pub fn check_java_install() -> bool {
         .unwrap_or(false)
     }
 
-fn run(cmd: &[&str]) -> anyhow::Result<()> {
-    let status = process::Command::new(cmd[0]).args(&cmd[1..]).status()?;
-    if !status.success() {
-        anyhow::bail!("command {:?} failed", cmd);
-    }
-    Ok(())
-}
+// fn run(cmd: &[&str]) -> Result<(), Box<dyn Error>> {
+//     let status = process::Command::new(cmd[0]).args(&cmd[1..]).status()?;
+//     if !status.success() {
+//         return Err("Unable to run install command".into())
+//     }
+//     Ok(())
+// }

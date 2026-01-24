@@ -17,7 +17,6 @@ pub const JAVA_URL: &str = r"https://www.oracle.com/java/technologies/javase/jdk
 
 pub mod tools {
     // Standard Library Imports
-    use std::process::{Command, Stdio};
     use std::path;
     use std::env;
     use std::error::Error;

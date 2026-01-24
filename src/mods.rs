@@ -131,6 +131,7 @@ impl Fabric {
     pub fn run_installer(&mut self, mc_path:&str) -> Result<ExitStatus, Box<dyn Error>> {
         // Runs
         // Java Installation
+        println!("INSTALLER: {}", &self.fabric.path);
         let status = Command::new("java")
         .args(&[
             "-jar",

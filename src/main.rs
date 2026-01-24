@@ -36,6 +36,27 @@ fn main() {
     };
     println!("Currspice: Configuration File Initialized...");
 
+    // Checks if Java is installed and if not, installs Java
+    println!("Currspice: Checking for Java Installation");
+    let java_check = mods::java::check_java_install();
+    if java_check {
+        // Java is already installed on the system
+        println!("Currspice: Java Install Found, using current installation.");
+    } else {
+        // Java is not installed on the system and attempts to install for user
+        println!("Currspice: Java NOT found. Installing Java...");
+        match mods::java::install_java() {
+            Ok(_) => println!("Currspice: Java successfully installed"),
+            Err(e) => {
+                println!("Currspice ERROR: Unable to install Java");
+                println!("Currspice: Please install Java on your machine or attempt running as admin.");
+                println!("{e}");
+                end();
+                process::exit(1);
+            },
+        }
+    }
+
     // Guesses directory and tries to open it
     let minecraft = match mods::tools::guess_minecraft_dir() {
         Ok(dir) => dir,
@@ -152,6 +173,7 @@ fn main() {
         }
     };
 
+    // Let's user know that installation completed successfully.
     println!("Currspice: File downloaded successfully");
 
     // Finishes up process to let user read console
@@ -165,23 +187,4 @@ fn end() {
     let mut input = String::new();
     io::stdin().read_line(&mut input).unwrap();
 }
-
-// fn main() {
-//   let _ = currspice_mods::java::install_java();
-
-//   process::Command::new("java")
-//     .arg("--version")
-//     .status()
-//     .unwrap();
-// }
-
-// fn run(cmd: &[&str]) -> anyhow::Result<()> {
-//     let status = process::Command::new(cmd[0]).args(&cmd[1..]).status()?;
-//     if !status.success() {
-//         anyhow::bail!("command {:?} failed", cmd);
-//     }
-//     Ok(())
-// }
-
-
 

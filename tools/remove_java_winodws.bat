@@ -14,7 +14,7 @@ echo ⬅ Uninstalling Eclipse Temurin 17 JDK …
 
 REM 2️⃣  Silent uninstall (no prompts)
 winget uninstall --id EclipseAdoptium.Temurin.17.JDK ^
-    -e --silent --accept-source-agreements
+    -e --accept-source-agreements
 
 IF %ERRORLEVEL% NEQ 0 (
     echo [ERROR] winget uninstall failed with exit code %ERRORLEVEL%
