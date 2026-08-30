@@ -1,1 +1,4 @@
 /target
+
+# Runtime artifact: written to CWD by Config::download_new() — never commit (ROADMAP.md, Phase 0)
+/mods.yaml
