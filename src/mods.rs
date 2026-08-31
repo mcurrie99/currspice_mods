@@ -244,32 +244,20 @@ impl Fabric {
 
     /// Run the headless installer, then verify its success contract: the
     /// `fabric-loader-<mc_version>` profile exists in launcher_profiles.json.
-   ///
-    /// Uses `java` (JAVA_HOME-aware) deliberately — the maven `.exe` is a
-    /// GUI app that cannot run unattended (see module doc).
-    pub fn run_installer(&self) -> Result<(), Box<dyn Error>> {
-        let java_bin = std::env::var_os("JAVA_HOME")
-            .map(|h| {
-                PathBuf::from(h).join("bin").join(if cfg!(windows) {
-                    "java.exe"
-                } else {
-                    "java"
-                })
-            })
-            .filter(|p| p.exists())
-            .unwrap_or_else(|| {
-                PathBuf::from(if cfg!(windows) { "java.exe" } else { "java" })
-            });
-
+    ///
+    /// `java_bin` is resolved by the caller via [`crate::jre::ensure_java`]
+    /// (system java → cached private JRE → one-time download), so friends
+    /// never need a Java install of their own.
+    pub fn run_installer(&self, java_bin: &Path) -> Result<(), Box<dyn Error>> {
         let args = self.installer_command();
         eprintln!("Currspice: running {}", [java_bin.display().to_string(), args.join(" ")].join(" "));
 
-        let status = std::process::Command::new(&java_bin)
+        let status = std::process::Command::new(java_bin)
             .args(&args)
             .status()
             .map_err(|e| {
                 format!(
-                    "could not start Java ({e}). The Fabric step needs a Java Runtime (17+) — the installer itself is a Java program. Install one and re-run.",
+                    "could not start Java ({e}). If you installed Java today, close and re-open this program so it can see it.",
                 )
             })?;
 

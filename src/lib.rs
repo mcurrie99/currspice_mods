@@ -1,4 +1,5 @@
 pub mod config;
+pub mod jre;
 pub mod mods;
 pub mod tools;
 

@@ -34,6 +34,10 @@ struct Cli {
     /// Verbose output (raw commands, URLs)
     #[arg(long)]
     verbose: bool,
+
+    /// Never download anything (not even a private Java copy)
+    #[arg(long)]
+    no_download: bool,
 }
 
 /// Exit-code contract (structured failure — no guessing from prose).
@@ -143,7 +147,7 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
         ));
     }
 
-    // 3. Fabric: download installer, seed the profile file, run, verify.
+    // 3. Fabric: own Java → download installer → seed profile → run → verify.
     let mut fabric = Fabric::from_config(&config)
         .map_err(|e| (EXIT_CONFIG, format!("could not set up the Fabric install: {e}")))?;
     println!(
@@ -151,6 +155,9 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
         fabric.get_mc_version(),
         fabric.get_inst_version()
     );
+    let allow_download = !cli.no_download;
+    let java_bin =
+        currspice_mods::jre::ensure_java(allow_download).map_err(|e| (EXIT_INSTALL, e.to_string()))?;
     fabric.download().map_err(|e| {
         (
             EXIT_NETWORK,
@@ -160,7 +167,7 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
     fabric
         .seed_launcher_profile()
         .map_err(|e| (EXIT_INSTALL, format!("could not prepare the launcher profile file: {e}")))?;
-    fabric.run_installer().map_err(|e| (EXIT_INSTALL, e.to_string()))?;
+    fabric.run_installer(&java_bin).map_err(|e| (EXIT_INSTALL, e.to_string()))?;
     println!("Currspice: Fabric profile installed");
 
     // 4. Launcher profile: size the heap, brand the profile.
