@@ -41,18 +41,13 @@ The installer must keep working when the app/server is down (P5). The app must m
 
 Fix the current shape before adding anything.
 
-- [ ] **Resolve manifest drift.** `docs/mods.yaml` says `mc_version: 1.21.1` but its mod URLs are 1.21.11 builds; the untracked root `mods.yaml` says `1.21.11`. Decide the real version, make `docs/mods.yaml` the single authoritative copy (it's what GitHub Pages serves as `server.currspice.com`), and add root `mods.yaml` to `.gitignore` (it's a runtime artifact of `download_new`).
-  - *Done when:* one source of truth, no stale copy in git, CI would catch a version mismatch between `mc_version` and mod URL slugs (simple test: every `server_mods` URL contains the `mc_version` string).
-- [ ] **Restore Fabric installer arguments.** `Fabric::run_installer` (`src/mods.rs:131`) currently launches the exe with *no* arguments; the `java -jar ... client -mcversion ... -loader ...` path is commented out and `mc_version`/`inst_version` are ignored. The commented code was also `java -jar` (the new artifact is a `.exe`). Re-enable an explicit, correct invocation (exe + `client -mcversion <v> -loader <v>`) or delete the unused fields.
-  - *Done when:* a fresh install on a clean machine produces the exact requested MC version + loader, verified by the profile name in `launcher_profiles.json`.
-- [ ] **Make profile editing robust.** `Config::edit_profile` (`src/config.rs:126`) splits `javaArgs` on `-` — brittle (breaks on any argument with an inner `-`, and the `Xmx` token search is fragile). Replace with whitespace-based argument parsing.
-  - *Done when:* unit test covers "Xmx present", "Xmx absent", "no javaArgs" (fallback to `JVM_ARGS`), and an argument containing a dash.
-- [ ] **Wire up or kill `user_mods`.** Config parses it, nothing installs it. Either the installer loops it (with the same idempotency guarantees as server_mods) or the field goes away.
-- [ ] **CLI surface via `clap`.** Add `--mc-dir <path>` (kills the hardcoded `C:\Users\%USERNAME%...` TODO in `main.rs:14`), `--config <path>`, and `--dry-run`.
-  - *Done when:* `currspice_mods.exe --help` is self-explanatory; non-default install dirs work.
-- [ ] **Verify on completion.** After installing, re-read the mods folder, count files vs. manifest entries, print a summary table (`name — ok/new/skipped`).
-- [ ] **Windows build from anywhere.** The `cross`-compile pipeline commit exists but CI (`rust.yml`) only builds+tests on Ubuntu. Add a job: cross-compile the Windows MSVC exe (e.g. `cargo xwin` or `cross --target x86_64-pc-windows-msvc`) and attach the exe as a **GitHub Release artifact**.
-  - *Done when:* a PR to `main` produces `currspice_mods.exe` in a draft release that runs on Windows.
+- [x] **Resolve manifest drift.** (DONE 2026-08-30 — `docs/mods.yaml` restored to `main`'s working `1.21.11`; root `mods.yaml` gitignored as a runtime artifact; added `Config::verify_version_consistency`, a whole-token drift guard that hard-stops a 1.21.1-declared / 1.21.11-built manifest with a human message.) Verified: the real 1.21.11 manifest passes; the `1_21_x_update` manifest is rejected at exit 1 naming every bad URL.
+- [x] **Restore Fabric installer arguments.** (DONE — `Fabric::run_installer` now runs the verified headless `java -jar … client -dir … -mcversion … -loader …`, seeds `launcher_profiles.json` if absent, and *verifies* the `fabric-loader-<v>` profile actually appeared. `mc_version`/`inst_version` are used again. Note: the maven `.exe` is a GUI app that can't run unattended — we execute the `.jar`; both commands are locked by tests.) Reproduced locally against a real 1.21.11 / 0.18.4 install.
+- [x] **Make profile editing robust.** (DONE — `build_java_args` splits on whitespace, never `-`; Xmx present/absent/empty and dash-heavy flags all covered by tests; a missing profile is now a clear error instead of a corrupted write.)
+- [x] **Wire up or kill `user_mods`.** (DONE — `Config::all_mods()` yields server + user mods and the installer loops both, idempotent by presence.)
+- [x] **CLI surface via `clap`.** (DONE — `--mc-dir`, `--config`, `--dry-run`, `--verbose`; `--help` is self-contained.)
+- [x] **Verify on completion.** (DONE — installer prints an installed / already-present summary plus the resolved mods path and heap; downloads go to `.part` files and stale ones are cleaned, so no half-jar.)
+- [x] **Windows build from anywhere.** (DONE — CI now has a `windows-latest` job: `cargo build --release` + full test suite + package `currspice_mods-windows-x86_64.exe` as an artifact. Chosen over winres/MSVC cross-compiling because it needs no fragile toolchain.)
 
 ## Phase 1 — Reliable Self-Contained Installer
 
@@ -156,7 +151,7 @@ User-approved scope (2026-08): *"admin tools like telling the server to back up 
 
 | Phase | Status |
 |-------|--------|
-| 0 — Foundations | ⬜ |
+| 0 — Foundations | ✅ done 2026-08-30 (build + `cargo test` 39/39 release, good manifest passes, bad one hard-stops) |
 | 1 — Reliable installer | ⬜ |
 | 2 — Manifest v2 | ⬜ |
 | 3 — Currspice Home app (Tauri + axum + login) | ⬜ |
