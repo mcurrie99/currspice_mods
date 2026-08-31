@@ -1,6 +1,6 @@
 path:
-mc_version: 1.21.1
-installer_version: 0.16.12
+mc_version: 1.21.11
+installer_version: 0.18.4
 fabric: https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.exe
 server_mods:
 - https://cdn.modrinth.com/data/uCdwusMi/versions/GT3Bm3GN/DistantHorizons-2.4.5-b-1.21.11-fabric-neoforge.jar

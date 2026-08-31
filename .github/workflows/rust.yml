@@ -10,13 +10,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  # Fast, cross-platform signal on every push/PR: builds and runs the full
+  # test suite. Everything in the crate is written to pass on either OS.
+  test:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  # Produce the artifact friends actually download: a Windows release .exe.
+  # Building on a real Windows runner sidesteps the winres/MSVC cross-compile
+  # path entirely.
+  windows-build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build (release)
+      run: cargo build --release
+    - name: Run tests
+      run: cargo test --release
+    - name: Package the installer
+      run: |
+        New-Item -ItemType Directory -Force -Path dist | Out-Null
+        Copy-Item target/release/currspice_mods.exe dist/currspice_mods-windows-x86_64.exe
+    - name: Upload installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: currspice_mods-windows
+        path: dist/currspice_mods-windows-x86_64.exe
