@@ -7,3 +7,6 @@
 # Python (manifest generator tooling)
 __pycache__/
 *.pyc
+
+# local dev shell helper (machine-specific temp-dir fix)
+.envguard.sh
