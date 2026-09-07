@@ -21,8 +21,9 @@ sha2 = "0.10.9"
 sysinfo = "0.35.1"
 zip = "2"
 
-[dev-dependencies]
 tempfile = "3"
+
+[dev-dependencies]
 
 [build-dependencies]
 winres = "0.1"

@@ -1,4 +1,9 @@
 /target
 
-# Runtime artifact: written to CWD by Config::download_new() — never commit (ROADMAP.md, Phase 0)
+# Optional user-supplied CWD override; canonical/embedded source is docs/mods.yaml.
+# The installer does not download or overwrite this file as a fallback.
 /mods.yaml
+
+# Python (manifest generator tooling)
+__pycache__/
+*.pyc

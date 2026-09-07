@@ -2,7 +2,7 @@
 
 > **Purpose:** Source of truth for *how* this project evolves. Future work should match a phase below; if a new idea doesn't fit, add it to the right phase (or propose a new one here before building it).
 > **How to use:** Phases are ordered by dependency. Each item has acceptance criteria. Update status markers (`⬜` todo / `🚧` in progress / `✅` done) as we go.
-> **Last updated:** 2026-08-30 (v2 — Tauri app, login system, and admin tools added per user direction)
+> **Maintenance note:** Read `README.md` for current runtime behavior and `docs/DEVELOPMENT.md` for verification evidence and the next bounded task. Historical completion notes below describe their stated checkpoints, not a fresh verification of your working tree.
 
 ---
 
@@ -26,11 +26,11 @@ The installer must keep working when the app/server is down (P5). The app must m
 
 | # | Principle | Consequence |
 |---|-----------|-------------|
-| P1 | **Manifest is the contract.** All mod knowledge lives in `mods.yaml`, never in code. | Changing the mod list must never require a code release. |
-| P2 | **Installer is offline-capable & deterministic.** Embedded default manifest + optional local `mods.yaml`; same bytes in, same machine state out. | Testable, works on flaky connections, no hidden network deps. |
+| P1 | **Manifest is the contract.** The canonical catalog is `docs/mods.yaml`; a CWD `mods.yaml` or explicit file is a local override. | A compatible installer can consume a new external manifest without a code release. Updating an executable's embedded snapshot requires rebuilding it. |
+| P2 | **Manifest resolution works offline.** Explicit/CWD manifest overrides plus an embedded default remove the manifest-host dependency. | A fresh installation still needs artifact downloads. Strict no-download mode must reject missing prerequisites. Existing unrelated files are preserved, so identical manifests do not imply identical whole-machine state. |
 | P3 | **Idempotent installs.** Re-running must be safe and cheap (skip what's current, fix what's stale). | No "I already ran it" support tickets. |
 | P4 | **Rust-core app.** Rust end-to-end where it counts (installer, axum backend, Tauri shell); the app UI is a lightweight web view inside Tauri. No Node build toolchains, no heavy frontend frameworks. | One toolchain, one CI, small attack surface. |
-| P5 | **Distribution ≠ control.** The exe ships via GitHub Releases (static, immutable). The live server does only interactive things. | Friends never depend on the server being up to *play*. |
+| P5 | **Distribution ≠ control.** GitHub Releases are the planned distribution channel; the future backend handles interactive control. | Installation must not require backend login or server-control availability. Joining multiplayer obviously still requires the Minecraft server. Release publication is separate from the current CI artifact upload. |
 | P6 | **YAML stays human-editable.** It's the thing you'll edit at 1am to bump a mod. | No JSON-schema tooling required to publish a change. |
 | P7 | **Fail loud, fail early, fail with a sentence a 16-year-old understands.** | Installer console output is its UI; app errors are human too. |
 | P8 | **YAGNI.** No multi-server, no self-signup, no mod marketplace until the current shape is boring. (Accounts *are* in scope — user-approved.) | Phases below stay small. |
@@ -51,13 +51,13 @@ Fix the current shape before adding anything.
 
 ## Phase 1 — Reliable Self-Contained Installer
 
-- [ ] **Embedded default manifest.** `include_str!` a tracked default into the binary. Precedence: `--config` > `./mods.yaml` (CWD) > embedded. Lets you ship a release that's *always* installable, even with zero network to the manifest host (mod CDNs obviously still needed).
+- [ ] **Embedded default manifest.** `include_str!` a tracked default into the binary. Precedence: `--config` > `./mods.yaml` (CWD) > embedded. Removes the manifest-host dependency. Missing Fabric/Minecraft/mod artifacts and possibly the private installer JRE still require network access; an empty machine is not offline-installable.
 - [ ] **Checksums in the manifest & enforced at install.** Add `sha256` per mod entry; download to `.part` temp file, verify hash, then atomic rename. On mismatch: delete, retry once, then fail with the hash in the message.
   - *Done when:* corrupted-partial-download scenario (simulate by writing a truncated file) ends in a clean retry-or-fail, never a half-jar left in `mods/`.
 - [ ] **Idempotency.** If target exists and sha256 matches: `skipped`. Exists but differs: `replaced`. Missing: `installed`. Same summary output as P0 verification. No re-download on re-run when current.
-- [ ] **Structured exit codes + `--verbose`.** 0 ok · 1 config · 2 network · 3 install-run · 4 verify. Verbose logs URLs/hashes; default stays human sentences (P7).
-- [ ] **Sequencing safety.** Fabric install → *verify Fabric profile exists* → edit profile → mods. Today a failed Fabric install still attempts profile edits with a confusing error. Make the dependency explicit with one clear error.
-- [ ] **Smoke test binary** (or a `--selftest` flag): runs the whole pipeline against `testing/mods.yaml` with stubbed HTTP, in CI, in the dev directory.
+- [ ] **Structured exit codes + `--verbose`.** 0 ok · 1 config · 2 network · 3 install-run · 4 verify. Verbose logs URLs/hashes and raw commands; default stays human sentences (P7).
+- [ ] **Sequencing safety.** Fabric install → *verify Fabric profile exists* → edit profile → mods. Keep the dependency explicit with one clear error. The Phase 0 implementation already short-circuited failures; Phase 1 must cover this sequencing with deterministic pipeline tests.
+- [ ] **Smoke test binary** (or a `--selftest` flag, or an equivalent integration test target): runs the production pipeline against temporary test fixtures with stubbed HTTP and a fake Fabric runner, through `cargo test` in CI. Historical `testing/mods.yaml` is a legacy fixture, not the live catalog.
   - *Done when:* `cargo test` stays green on Ubuntu *and* a manual Windows pass is a 3-minute checklist in the README.
 
 ## Phase 2 — Manifest v2 (the contract evolves)
@@ -127,21 +127,21 @@ User-approved scope (2026-08): *"admin tools like telling the server to back up 
 
 | Area | Decision | Why |
 |------|----------|-----|
-| Manifest host | GitHub Pages via `docs/` (`server.currspice.com`) | Already working; free; immutable history. |
+| Manifest host | GitHub Pages via `docs/` (`server.currspice.com`) | Existing publishing arrangement; Git provides history. The live URL is mutable and availability must be checked separately when distributing an update. |
 | Distribution | GitHub Releases for the installer exe **and** the Tauri app binary | Deterministic, no server dependency (P5). |
-| Fabric install | Windows exe path (no Java prerequisite) | Matches "Transitioned to .exe fabric install" commit; friends don't have Java. |
+| Fabric install | Headless Fabric installer **JAR**, invoked with a discovered or privately provisioned Java runtime | The upstream Fabric exe is a GUI program. A private JRE removes the need for friends to install Java themselves for this step; Minecraft game-runtime provisioning remains the official launcher's job. |
 | Language | Rust for everything, incl. the app (Tauri shell + axum backend) | One toolchain; installer already proves the stack. |
 | GUI | **Tauri** for the Currspice Home app — *user-approved direction (2026-08), supersedes the earlier "no GUI" decision* | The app is the home of the server for everyone; Tauri keeps a small Rust core + tiny binary; no Electron. The installer stays a console exe forever. |
 | Auth | Real login: username + password (argon2) with roles `owner/admin/friend`; owner-provisioned invites, no self-signup | *User requirement (2026-08):* login system for the app; control & admin tools need an audit trail. |
 | Admin tools | In scope: on-demand backup, backup history/restore, RCON, scheduled maintenance, roles | *User requirement (2026-08):* "telling the server to back up and things like that." |
 | Manifest format | YAML, versioned, human-editable | It's the 1am edit; JSON tooling not required (P6). |
 | State DB | SQLite on the box (accounts, roles, audit log, backup history); flat files elsewhere | The login system + audit needs real storage; SQLite is the boring choice. |
-| Cross-compile | `cargo xwin`/`cross` in CI for Windows MSVC installer + Tauri Windows app | You compile anywhere; friends always get Windows artifacts. |
+| Windows builds | Native `windows-latest` GitHub Actions runner for the current installer; Ubuntu job for portable tests | Avoids MSVC/resource cross-compilation fragility. Building and releasing the future Tauri app/backend is not implemented yet. |
 
 ## Open Questions (answer before their phase starts)
 
-1. **What's the real target MC version right now?** 1.21.1 or 1.21.11? (Phase 0 drift)
-2. **Where do friends get the exe today** (Discord link? this machine? a shared folder?) — determines how urgent "GitHub Releases" is.
+1. **Manifest target:** `docs/mods.yaml` currently declares Minecraft **1.21.11** / Fabric loader **0.18.4**. This resolves the repository drift question, not a live check of the server. Confirm the actual server matches before distributing an installer.
+2. **Where do friends get the exe today** (Discord link? this machine? a shared folder?) — still requires the owner's answer. CI uploads a workflow artifact; that is not automatic GitHub Release publication.
 3. **Is the Minecraft server on the same Linux box** the backend will live on? Which implementation (Paper/Forge/vanilla), and is RCON enabled?
 4. **Role split:** who should be `admin` vs. plain `friend`? (drives Phase 3 provisioning + Phase 4 permissions)
 5. ~~Trusted-friends-only assumption / "no real auth"~~ — **RESOLVED 2026-08-30:** real login (username + password, roles) required from app v1; the installer stays anonymous.

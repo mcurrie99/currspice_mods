@@ -9,6 +9,4 @@ fn main() {
 }
 
 #[cfg(not(windows))]
-fn main() {
-    
-}
+fn main() {}

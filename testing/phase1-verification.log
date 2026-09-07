@@ -1,0 +1,14 @@
+Implementation verification (actual local executions; Windows x64, no real Minecraft install)
+Cargo run via C:/Users/matth/.cargo/bin/cargo.exe with subprocess environment TMP/TEMP/TMPDIR=C:/Users/matth/AppData/Local/Temp. Hermes shell hook otherwise overwrites TMP with an invalid /e/... native path.
+
+RED/GREEN cycles completed:
+- cargo test modref_accepts: baseline seven type errors repaired without discarding ModRef; test then failed unknown variant https://host/a.jar; added untagged serde and strict optional digest validation; cargo test passed 52 tests.
+- cargo test config_rejects_bad_entry: failed c.validate().is_err(); wire per-entry validation; focused test passed.
+- cargo test --test manifest: missing Config::select API, then assertion all embedded hashes present failed; explicit/local/embedded selector implemented; exact ordered URL pairing verified for all 12 old defaults hashes before incorporation in docs/mods.yaml; focused test passed. No hash downloads or refresh. Removed defaults/mods.yaml; Windows denied removing empty defaults directory.
+- python -m unittest discover -s scripts -p "test_*.py": corrected temporary REPO test fixture, then failed missing '- url:' mapping; generator rewritten to canonical YAML preserving user_mods; focused test passed.
+- cargo test --test download: missing Transport/Mod::install API; implemented typed streaming download + tempfile atomic persist + SHA256 retry; test passed installing, skipping, replacing, retrying, preserving prior file and cleanup on failure.
+- cargo test new_rejects_unsafe: failed accepted empty URL; safe HTTPS jar filename validation and Unicode-safe extractor implemented; passed.
+- cargo test --test fabric: missing verify_profile; official legacy exe->jar normalization and actual profile JSON/version checks implemented; both tests passed.
+
+In progress: shared pipeline smoke test / CLI / CI. Parent's JRE worker owns src/jre.rs.
+No-download safety decision under implementation: never invoke Fabric subprocess offline (it can download). If a complete required Fabric cache cannot be proven, fail before mutation rather than claiming an offline install. Dry-run will remain available offline without Java execution.

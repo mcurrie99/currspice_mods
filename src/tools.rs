@@ -18,8 +18,9 @@ pub fn default_minecraft_path(username: &str) -> PathBuf {
 /// Guess the (Windows) Minecraft directory: `%USERNAME%` + the standard
 /// Roaming path. Project scope (IDEA.md) is Windows-only.
 pub fn guess_minecraft_dir() -> Result<PathBuf, Box<dyn Error>> {
-    let username = env::var("USERNAME")
-        .map_err(|_| "USERNAME environment variable is not set (expected on Windows)".to_string())?;
+    let username = env::var("USERNAME").map_err(|_| {
+        "USERNAME environment variable is not set (expected on Windows)".to_string()
+    })?;
     let guess = default_minecraft_path(&username);
     if guess.is_dir() {
         Ok(guess)
@@ -60,9 +61,18 @@ mod tests {
         // the invariants that actually matter rather than a brittle count.)
         let p = default_minecraft_path("matth");
         let s = p.to_string_lossy().to_string();
-        assert!(s.starts_with("C:\\Users\\matth\\") || s.starts_with("C:/Users/matth/"), "s={s}");
-        assert!(s.contains("AppData\\Roaming\\.minecraft") || s.contains("AppData/Roaming/.minecraft"), "s={s}");
-        assert!(!s.ends_with('\\') && !s.ends_with('/'), "no trailing separator: s={s}");
+        assert!(
+            s.starts_with("C:\\Users\\matth\\") || s.starts_with("C:/Users/matth/"),
+            "s={s}"
+        );
+        assert!(
+            s.contains("AppData\\Roaming\\.minecraft") || s.contains("AppData/Roaming/.minecraft"),
+            "s={s}"
+        );
+        assert!(
+            !s.ends_with('\\') && !s.ends_with('/'),
+            "no trailing separator: s={s}"
+        );
     }
 
     #[test]
@@ -90,7 +100,10 @@ mod tests {
     #[test]
     fn ram_alloc_is_within_sane_band() {
         let alloc = determine_ram_alloc(2.0);
-        assert!((2..=32).contains(&alloc), "allocation {alloc} GiB is outside [2, 32]");
+        assert!(
+            (2..=32).contains(&alloc),
+            "allocation {alloc} GiB is outside [2, 32]"
+        );
     }
 
     #[test]

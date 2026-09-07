@@ -80,19 +80,37 @@ pub fn resolve(system_ok: bool, cache_ok: bool, allow_download: bool) -> Option<
 pub fn probe_java(bin: &Path) -> bool {
     Command::new(bin)
         .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
+        .output()
+        .map(|o| {
+            accepts_java_output(
+                o.status.success(),
+                &String::from_utf8_lossy(&o.stdout),
+                &String::from_utf8_lossy(&o.stderr),
+            )
+        })
         .unwrap_or(false)
 }
 
+fn accepts_java_output(success: bool, stdout: &str, stderr: &str) -> bool {
+    success
+        && stderr.lines().chain(stdout.lines()).any(|line| {
+            let mut words = line.split_whitespace();
+            if !matches!(words.next(), Some("java" | "openjdk")) {
+                return false;
+            }
+            let token = match words.next() {
+                Some("version") => words.next(),
+                other => other,
+            };
+            token
+                .and_then(|s| s.trim_matches('"').split(['.', '-']).next())
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|major| major >= 17)
+        })
+}
+
 fn java_bin_name() -> &'static str {
-    if cfg!(windows) {
-        "java.exe"
-    } else {
-        "java"
-    }
+    if cfg!(windows) { "java.exe" } else { "java" }
 }
 
 /// The cached JRE's java, if the layout is present.
@@ -106,73 +124,162 @@ pub fn cached_java(home: &Path) -> Option<PathBuf> {
 /// Resolve and return the java binary to run the Fabric installer with.
 /// Never panics; every failure mode explains itself to a friend.
 pub fn ensure_java(allow_download: bool) -> Result<PathBuf, Box<dyn Error>> {
-    let system = PathBuf::from(java_bin_name());
-    let home = jre_home();
-    let sys_ok = probe_java(&system);
-    let cache_ok = cached_java(&home).is_some();
+    ensure_java_with(
+        allow_download,
+        &jre_home(),
+        env::var_os("JAVA_HOME").map(PathBuf::from).as_deref(),
+        probe_java,
+        install_jre,
+    )
+}
 
-    match resolve(sys_ok, cache_ok, allow_download) {
-        Some(Decision::System) => Ok(system),
-        Some(Decision::Cached) => Ok(cached_java(&home).expect("cache_ok was true in resolve()")),
-        Some(Decision::Download) => {
-            println!("Currspice: Java not found on this computer — fetching a private copy (one-time, ~40 MB)...");
-            install_jre(&home)?;
-            println!("Currspice: Java ready.");
-            Ok(cached_java(&home).expect("cache must exist after install_jre"))
-        }
-        None => Err(std::convert::Into::<Box<dyn Error>>::into(
-            "This computer has no Java, and I can't fetch one right now (offline?).\n\
-             Either go online and re-run — I'll bring my own Java — or install any Java 17+\n\
-             (free at https://adoptium.net/temurin/releases) and re-run.",
-        )),
+fn ensure_java_with(
+    allow_download: bool,
+    home: &Path,
+    java_home: Option<&Path>,
+    mut probe: impl FnMut(&Path) -> bool,
+    mut install: impl FnMut(&Path) -> Result<PathBuf, Box<dyn Error>>,
+) -> Result<PathBuf, Box<dyn Error>> {
+    let system = PathBuf::from(java_bin_name());
+    if probe(&system) {
+        return Ok(system);
     }
+    if let Some(jhome) = java_home.filter(|p| !p.as_os_str().is_empty()) {
+        let java = jhome.join("bin").join(java_bin_name());
+        if probe(&java) {
+            return Ok(java);
+        }
+    }
+    if let Some(java) = cached_java(home).filter(|java| probe(java)) {
+        return Ok(java);
+    }
+    if allow_download {
+        println!(
+            "Currspice: Java 17+ not found — fetching a private installer runtime (one-time, ~40 MB)..."
+        );
+        return install(home);
+    }
+    Err("No working Java 17+ was found on PATH, JAVA_HOME or in the private cache. Downloads are disabled. Install Java 17+ or enable downloads and re-run.".into())
 }
 
 /// Download → `.part` → extract → relocate into `home`. Idempotent:
 /// an existing valid cache short-circuits the whole thing.
 pub fn install_jre(home: &Path) -> Result<PathBuf, Box<dyn Error>> {
-    if let Some(java) = cached_java(home) {
-        if probe_java(&java) {
-            return Ok(java);
-        }
-        // Corrupt/stale cache: clear it and redo.
-        let _ = fs::remove_dir_all(home);
-    }
+    install_jre_with(
+        home,
+        env::consts::OS,
+        env::consts::ARCH,
+        probe_java,
+        download_archive,
+    )
+}
 
-    let part = home.with_extension("zip.part");
-    if let Some(parent) = home.parent() {
-        // First run: the whole data dir may not exist yet.
-        fs::create_dir_all(parent)?;
-    }
-    let resp = reqwest::blocking::get(jre_download_url())?;
-    let mut reader = resp;
-    let mut body: Vec<u8> = Vec::new();
-    reader.read_to_end(&mut body)?;
+fn download_archive() -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut resp = reqwest::blocking::get(jre_download_url())?;
+    let mut body = Vec::new();
+    resp.read_to_end(&mut body)?;
     if body.is_empty() {
         return Err("Java download came back empty".into());
     }
-    fs::write(&part, &body)?;
-    let bytes = fs::read(&part)?;
-    let _ = fs::remove_file(&part);
+    Ok(body)
+}
 
-    // Extract to a scratch dir, find the JRE root, relocate into `home`.
-    let scratch = home.with_extension("extract");
-    let _ = fs::remove_dir_all(&scratch);
-    fs::create_dir_all(&scratch)?;
-    extract_zip(&bytes, &scratch)?;
-    let java = find_java_in_tree(&scratch)
-        .ok_or("downloaded archive did not contain a usable JRE (bin/java missing)")?;
-    let root = java.parent().ok_or("java has no parent")?.parent().ok_or("no jre root")?;
-    let _ = fs::remove_dir_all(home);
-    fs::rename(root, home)
-        .map_err(|e| format!("could not move the JRE into place: {e}"))?;
-    let _ = fs::remove_dir_all(&scratch);
+fn install_jre_with(
+    home: &Path,
+    os: &str,
+    arch: &str,
+    mut probe_java: impl FnMut(&Path) -> bool,
+    mut download: impl FnMut() -> Result<Vec<u8>, Box<dyn Error>>,
+) -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(java) = cached_java(home)
+        && probe_java(&java) {
+            return Ok(java);
+        }
+    if os != "windows" || arch != "x86_64" {
+        return Err("Private Java provisioning supports Windows x64 only; install Java 17+ on PATH or set JAVA_HOME.".into());
+    }
 
-    let final_java = cached_java(home).ok_or("JRE layout missing after install")?;
-    if probe_java(&final_java) {
-        Ok(final_java)
-    } else {
-        Err("JRE installed but its java fails to run — the archive may be for a different OS".into())
+    let body = download()?;
+    if body.is_empty() {
+        return Err("Java download came back empty".into());
+    }
+    let parent = home
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    let mut stage = StagingDir::create(parent)?;
+    let extracted = stage.0.as_ref().unwrap().join("extracted");
+    fs::create_dir(&extracted)?;
+    extract_zip(&body, &extracted)?;
+    let java = find_java_in_tree(&extracted).ok_or("Java archive has no bin/java")?;
+    if !probe_java(&java) {
+        return Err(
+            "Downloaded Java does not run or is older than Java 17; existing cache preserved"
+                .into(),
+        );
+    }
+    let root = java
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("Invalid JRE layout")?;
+    let backup = stage.0.as_ref().unwrap().join("previous");
+    let had_cache = fs::symlink_metadata(home).is_ok();
+    if had_cache {
+        fs::rename(home, &backup)?;
+    }
+    if let Err(error) = fs::rename(root, home) {
+        if had_cache && fs::rename(&backup, home).is_err() {
+            stage.0.take(); // Keep the recoverable old cache, never delete it.
+            return Err(format!(
+                "JRE replacement failed: {error}; old cache retained at {}",
+                backup.display()
+            )
+            .into());
+        }
+        return Err(format!("could not move the JRE into place: {error}").into());
+    }
+    let final_java = home.join("bin").join(java_bin_name());
+    if !probe_java(&final_java) {
+        // This tree belongs to this invocation. Roll back if relocation broke it.
+        if fs::remove_dir_all(home).is_err() || (had_cache && fs::rename(&backup, home).is_err()) {
+            stage.0.take();
+            return Err(format!(
+                "Java failed after relocation; recovery files retained at {}",
+                backup.display()
+            )
+            .into());
+        }
+        return Err("Java failed after relocation; previous cache restored".into());
+    }
+    Ok(final_java)
+}
+
+// Atomically reserve a unique sibling directory; only clean up our own files.
+struct StagingDir(Option<PathBuf>);
+impl StagingDir {
+    fn create(parent: &Path) -> io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        for _ in 0..100 {
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = parent.join(format!(".currspice-jre-{}-{id}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(Some(path))),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Cannot reserve Java staging directory",
+        ))
+    }
+}
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -220,7 +327,26 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Box<dyn Error>> {
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let name = file.name().to_string();
+        // Treat names as portable paths, independent of the host OS. Reject
+        // backslashes and colons too (Windows separators, drives and ADS).
+        if name.starts_with('/')
+            || name.contains('\\')
+            || name.contains(':')
+            || name.split('/').any(|part| part == "..")
+            || file.enclosed_name().is_none()
+            || file
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(format!("unsafe Java archive entry: {name}").into());
+        }
         let target = dest.join(&name);
+        // Do not follow links already present in a caller-supplied destination.
+        for ancestor in target.ancestors() {
+            if fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err("Java extraction destination contains a symlink".into());
+            }
+        }
         if file.is_dir() {
             fs::create_dir_all(&target)?;
             continue;
@@ -228,7 +354,10 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Box<dyn Error>> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut out = fs::File::create(&target)?;
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)?;
         io::copy(&mut file, &mut out)?;
     }
     Ok(())
@@ -271,6 +400,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn java_probe_requires_version_17_or_newer_and_success() {
+        for text in [
+            "",
+            "nonsense 99",
+            "java version \"1.8.0_402\"",
+            "openjdk version \"16.0.2\"",
+        ] {
+            assert!(!accepts_java_output(true, "", text), "accepted {text}");
+        }
+        for text in [
+            "openjdk version \"17.0.12\" 2024-07-16",
+            "java version \"21.0.1\"",
+            "openjdk 25-ea 2025-09-16",
+        ] {
+            assert!(accepts_java_output(true, "", text));
+            assert!(accepts_java_output(true, text, ""));
+            assert!(!accepts_java_output(false, "", text));
+        }
+    }
+
     // ---- layout & probes ------------------------------------------------------
 
     #[test]
@@ -303,30 +453,92 @@ mod tests {
 
     #[test]
     fn ensure_java_is_deterministic_given_probes() {
-        // On machines that have java: must resolve WITHOUT touching the
-        // cache. On machines without (and with download forbidden): must
-        // fail with the friendly offline message. Either way it must NOT
-        // panic or loop in an unknown state.
-        let home_default = jre_home();
-        let sys = PathBuf::from(java_bin_name());
-        if probe_java(&sys) {
-            let java = ensure_java(false).expect("system java present → resolves offline");
-            assert_eq!(java, sys);
-        } else {
-            let e = ensure_java(false).expect_err("no java + no download → friendly error");
-            let msg = e.to_string();
-            assert!(msg.contains("Java"), "message names Java: {msg}");
-            assert!(msg.contains("re-run") || msg.contains("re-run"), "gives a next step: {msg}");
-            let _ = home_default; // untouched
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("cache");
+        let jhome = dir.path().join("jdk");
+        let expected = jhome.join("bin").join(java_bin_name());
+        let result = ensure_java_with(
+            false,
+            &home,
+            Some(&jhome),
+            |p| p == expected,
+            |_| panic!("offline download"),
+        );
+        assert_eq!(result.unwrap(), expected);
+    }
+
+    #[test]
+    fn bad_cache_is_not_accepted_offline_and_is_repaired_online() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("bin")).unwrap();
+        let java = dir.path().join("bin").join(java_bin_name());
+        fs::write(&java, "broken").unwrap();
+        assert!(
+            ensure_java_with(
+                false,
+                dir.path(),
+                None,
+                |_| false,
+                |_| panic!("offline download")
+            )
+            .is_err()
+        );
+        let mut installs = 0;
+        let result = ensure_java_with(
+            true,
+            dir.path(),
+            None,
+            |_| false,
+            |_| {
+                installs += 1;
+                Ok(java.clone())
+            },
+        );
+        assert_eq!(result.unwrap(), java);
+        assert_eq!(installs, 1);
+        assert_eq!(fs::read_to_string(java).unwrap(), "broken");
+    }
+
+    #[test]
+    fn zip_rejects_unsafe_names_and_symlinks() {
+        use std::io::{Cursor, Write};
+        for name in [
+            "../escape",
+            "/absolute",
+            "C:/drive",
+            "C:drive",
+            "..\\escape",
+            "\\\\server\\share",
+            "a/../../escape",
+        ] {
+            let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            w.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(b"bad").unwrap();
+            let bytes = w.finish().unwrap().into_inner();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("out");
+            assert!(extract_zip(&bytes, &dest).is_err(), "accepted {name}");
+            assert!(!dir.path().join("escape").exists());
         }
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        w.add_symlink(
+            "link",
+            "../outside",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(extract_zip(&bytes, dir.path()).is_err());
     }
 
     // ---- zip extraction (the risky file-system part) --------------------------
 
     fn make_test_zip() -> Vec<u8> {
         use std::io::{Cursor, Write};
-        use zip::write::SimpleFileOptions;
         use zip::ZipWriter;
+        use zip::write::SimpleFileOptions;
 
         let mut w = ZipWriter::new(Cursor::new(Vec::new()));
         let opts = SimpleFileOptions::default();
@@ -365,6 +577,75 @@ mod tests {
         let java = nested.join(java_bin_name());
         fs::write(&java, b"stub").unwrap();
         assert_eq!(find_java_in_tree(dir.path()), Some(java));
+    }
+
+    #[test]
+    fn provisioning_rejects_unsupported_platform_before_network() {
+        let dir = tempfile::tempdir().unwrap();
+        for (os, arch) in [
+            ("linux", "x86_64"),
+            ("windows", "aarch64"),
+            ("macos", "x86_64"),
+        ] {
+            let home = dir.path().join("cache");
+            let result = install_jre_with(
+                &home,
+                os,
+                arch,
+                |_| false,
+                || panic!("unsupported platform downloaded"),
+            );
+            assert!(result.unwrap_err().to_string().contains("Windows x64"));
+            assert!(!home.exists());
+        }
+    }
+
+    #[test]
+    fn invalid_replacement_preserves_cache_and_unrelated_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("cache");
+        fs::create_dir_all(home.join("bin")).unwrap();
+        let java = home.join("bin").join(java_bin_name());
+        fs::write(&java, "old cache").unwrap();
+        let scratch = home.with_extension("extract");
+        fs::create_dir(&scratch).unwrap();
+        fs::write(scratch.join("unrelated"), "keep").unwrap();
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file(
+            format!("jdk/bin/{}", java_bin_name()),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut w, b"broken replacement").unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        assert!(
+            install_jre_with(&home, "windows", "x86_64", |_| false, || Ok(bytes.clone())).is_err()
+        );
+        assert_eq!(fs::read_to_string(java).unwrap(), "old cache");
+        assert_eq!(
+            fs::read_to_string(scratch.join("unrelated")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn failed_download_preserves_existing_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("cache");
+        fs::create_dir_all(home.join("bin")).unwrap();
+        let java = home.join("bin").join(java_bin_name());
+        fs::write(&java, "old cache").unwrap();
+        assert!(
+            install_jre_with(
+                &home,
+                "windows",
+                "x86_64",
+                |_| false,
+                || Err("offline".into())
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(java).unwrap(), "old cache");
     }
 
     #[test]

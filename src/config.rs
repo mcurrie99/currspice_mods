@@ -9,7 +9,61 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{fabric_profile_name, JVM_ARGS, LOGO, PROFILE_NAME};
+use crate::{JVM_ARGS, LOGO, PROFILE_NAME, fabric_profile_name};
+
+/// One mod entry in the manifest. Accepts both shapes, so existing v1 files
+/// keep working untouched:
+///
+/// ```yaml
+/// server_mods:
+/// - https://cdn.modrinth.com/.../sodium-....jar          # v1: URL only
+/// - url: https://cdn.modrinth.com/.../iris-....jar
+///   sha256: "8f2c…"                                          # optional, enforced at install
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum ModRef {
+    /// v1 form — the CDN link alone; no integrity check possible at install.
+    Url(String),
+    /// v1.5 form — the link plus an optional recorded sha256 (64 hex chars).
+    /// The installer enforces it and reports both digests on a mismatch, so a
+    /// changed CDN jar is never installed silently as a different file.
+    Entry { url: String, sha256: Option<String> },
+}
+
+impl ModRef {
+    pub fn url(&self) -> &str {
+        match self {
+            ModRef::Url(u) | ModRef::Entry { url: u, .. } => u,
+        }
+    }
+
+    /// Recorded checksum, if any (never ""-or-whitespace).
+    pub fn sha256(&self) -> Option<&str> {
+        match self {
+            ModRef::Url(_) => None,
+            ModRef::Entry { sha256, .. } => sha256.as_deref(),
+        }
+    }
+
+    /// A recorded sha256 must be a valid 64-char hex digest — a bad one means
+    /// a hand-edit went off the rails, and failing at load with a named mod is
+    /// much better than failing mid-install with two wrong hashes in the log.
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if let Some(h) = self.sha256() {
+            let ok = h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit());
+            if !ok {
+                return Err(format!(
+                    "config: the sha256 for {} is not a 64-character hex digest ({} chars — expected a 64-char lowercase hex string)",
+                    self.url(),
+                    h.chars().count()
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Config {
@@ -23,16 +77,33 @@ pub struct Config {
     /// Fabric loader version to install with.
     installer_version: String,
     /// Mods every friend must have for the server.
-    server_mods: Vec<String>,
+    server_mods: Vec<ModRef>,
     /// Per-user mods (opt-in for friends).
     #[serde(default)]
-    user_mods: Vec<String>,
+    user_mods: Vec<ModRef>,
     /// Fabric installer artifact to download (jar or exe — see
     /// `Fabric::run_installer` for why the jar is what we execute).
     fabric: String,
 }
 
 impl Config {
+    /// Explicit > existing CWD manifest > compiled canonical default. Never fetches.
+    pub fn select(explicit: Option<&Path>, cwd: &Path) -> Result<Self, Box<dyn Error>> {
+        if let Some(path) = explicit {
+            return Self::load_new(path);
+        }
+        let local = cwd.join("mods.yaml");
+        match fs::symlink_metadata(&local) {
+            Ok(_) => Self::load_new(&local),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let config: Self = serde_yaml::from_str(include_str!("../docs/mods.yaml"))?;
+                config.validate()?;
+                Ok(config)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// In-memory construction (tests, defaults, and future generation from
     /// the dashboard).
     pub fn new(
@@ -45,8 +116,14 @@ impl Config {
     ) -> Self {
         Config {
             path: String::from(path),
-            server_mods: server_mods.iter().map(|s| s.to_string()).collect(),
-            user_mods: user_mods.iter().map(|s| s.to_string()).collect(),
+            server_mods: server_mods
+                .iter()
+                .map(|s| ModRef::Url(s.to_string()))
+                .collect(),
+            user_mods: user_mods
+                .iter()
+                .map(|s| ModRef::Url(s.to_string()))
+                .collect(),
             mc_version: String::from(mc_version),
             installer_version: String::from(installer_version),
             fabric: String::from(fabric_url),
@@ -66,16 +143,26 @@ impl Config {
     /// modes that would otherwise surface as a confusing mid-install error.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.mc_version.trim().is_empty() {
-            return Err("config: mc_version is missing — the installer can't pick a Minecraft version".into());
+            return Err(
+                "config: mc_version is missing — the installer can't pick a Minecraft version"
+                    .into(),
+            );
         }
         if self.installer_version.trim().is_empty() {
             return Err("config: installer_version is missing — the installer can't pick a Fabric loader version".into());
         }
         if !self.fabric.starts_with("https://") {
-            return Err("config: the fabric installer URL is missing or not an https:// URL".into());
+            return Err(
+                "config: the fabric installer URL is missing or not an https:// URL".into(),
+            );
+        }
+        for item in self.mod_refs() {
+            item.validate()?;
         }
         if self.server_mods.is_empty() {
-            return Err("config: no mods are listed under server_mods — nothing would be installed".into());
+            return Err(
+                "config: no mods are listed under server_mods — nothing would be installed".into(),
+            );
         }
         for link in self.all_mods() {
             if !link.starts_with("https://") {
@@ -121,11 +208,10 @@ impl Config {
     pub fn download_new(filepath: &Path, link: &str) -> Result<Config, Box<dyn Error>> {
         let response = reqwest::blocking::get(link)?;
         let content = response.bytes()?;
-        if let Some(parent) = filepath.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = filepath.parent()
+            && !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;
             }
-        }
         fs::write(filepath, &content)?;
         Self::load_new(filepath)
     }
@@ -148,11 +234,11 @@ impl Config {
         &self.fabric
     }
 
-    pub fn get_server_mods(&self) -> &[String] {
+    pub fn get_server_mods(&self) -> &[ModRef] {
         &self.server_mods
     }
 
-    pub fn get_user_mods(&self) -> &[String] {
+    pub fn get_user_mods(&self) -> &[ModRef] {
         &self.user_mods
     }
 
@@ -160,6 +246,15 @@ impl Config {
     /// then user mods. Single loop in main.rs (old code only did the first
     /// half — that's how `user_mods` went to rot).
     pub fn all_mods(&self) -> impl Iterator<Item = &String> {
+        self.server_mods
+            .iter()
+            .chain(self.user_mods.iter())
+            .map(|m| match m {
+                ModRef::Url(u) | ModRef::Entry { url: u, .. } => u,
+            })
+    }
+
+    pub fn mod_refs(&self) -> impl Iterator<Item = &ModRef> {
         self.server_mods.iter().chain(self.user_mods.iter())
     }
 
@@ -170,11 +265,11 @@ impl Config {
     }
 
     pub fn set_server_mods(&mut self, new_server_mods: Vec<String>) {
-        self.server_mods = new_server_mods;
+        self.server_mods = new_server_mods.into_iter().map(ModRef::Url).collect();
     }
 
     pub fn set_user_mods(&mut self, new_user_mods: Vec<String>) {
-        self.user_mods = new_user_mods;
+        self.user_mods = new_user_mods.into_iter().map(ModRef::Url).collect();
     }
 
     /// Serialize this config back out to YAML (used by tests and, later,
@@ -336,6 +431,41 @@ pub fn build_java_args(existing: &str, alloc: u64) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn modref_accepts_both_yaml_shapes_and_rejects_bad_hashes() {
+        for yaml in [
+            "https://host/a.jar".to_string(),
+            format!("url: https://host/a.jar\nsha256: {}", "a".repeat(64)),
+        ] {
+            let item: ModRef = serde_yaml::from_str(&yaml).unwrap();
+            item.validate().unwrap();
+            assert_eq!(
+                item,
+                serde_yaml::from_str::<ModRef>(&serde_yaml::to_string(&item).unwrap()).unwrap()
+            );
+        }
+        for hash in ["", " ", "abc", &"z".repeat(64)] {
+            assert!(
+                ModRef::Entry {
+                    url: "https://host/a.jar".into(),
+                    sha256: Some(hash.into())
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn config_rejects_bad_entry_checksum() {
+        let mut c = sample_config();
+        c.server_mods = vec![ModRef::Entry {
+            url: "https://host/a.jar".into(),
+            sha256: Some("bad".into()),
+        }];
+        assert!(c.validate().is_err());
+    }
+
     fn sample_config() -> Config {
         Config::new(
             "",
@@ -357,7 +487,10 @@ mod tests {
         let out = build_java_args("-Xmx2G -XX:+UseG1GC", 4);
         assert!(out.contains("-Xmx4G"), "got: {out}");
         assert!(!out.contains("-Xmx2G"), "old Xmx survives: {out}");
-        assert!(out.contains("-XX:+UseG1GC"), "other flags must survive: {out}");
+        assert!(
+            out.contains("-XX:+UseG1GC"),
+            "other flags must survive: {out}"
+        );
     }
 
     #[test]
@@ -380,7 +513,10 @@ mod tests {
         let in_args = "-XX:G1HeapRegionSize=32M -Djdk.net.hosts.file=/etc/hosts -Xmx2G";
         let out = build_java_args(in_args, 8);
         assert!(out.contains("-XX:G1HeapRegionSize=32M"), "got: {out}");
-        assert!(out.contains("-Djdk.net.hosts.file=/etc/hosts"), "got: {out}");
+        assert!(
+            out.contains("-Djdk.net.hosts.file=/etc/hosts"),
+            "got: {out}"
+        );
         assert!(out.contains("-Xmx8G"), "got: {out}");
         assert_eq!(out.matches("-Xmx").count(), 1);
     }
@@ -442,13 +578,18 @@ mod tests {
             .expect_err("mixed versions must not install");
         let msg = e.to_string();
         assert!(msg.contains("1.21.11"), "offender link in message: {msg}");
-        assert!(msg.contains("manifest declares Minecraft 1.21.1"), "names the declared version: {msg}");
+        assert!(
+            msg.contains("manifest declares Minecraft 1.21.1"),
+            "names the declared version: {msg}"
+        );
     }
 
     #[test]
     fn consistency_catches_user_mods_too() {
         let mut c = sample_config();
-        c.set_user_mods(vec![String::from("https://cdn.modrinth.com/data/zzz/versions/kkk/mod-1.21.1.jar")]);
+        c.set_user_mods(vec![String::from(
+            "https://cdn.modrinth.com/data/zzz/versions/kkk/mod-1.21.1.jar",
+        )]);
         assert!(
             c.verify_version_consistency().is_err(),
             "a 1.21.1 build under a 1.21.11 manifest must be flagged"
@@ -487,7 +628,10 @@ mod tests {
         // must not.
         assert!(!conflict_in("sodium-0.8.2%2Bmc1.21.11.jar", "1.21.11"));
         // a non MC-versioned jar (Kotlin runtime): can't disprove → passes.
-        assert!(!conflict_in("fabric-language-kotlin-1.13.8%2Bkotlin.2.3.0.jar", "1.21.11"));
+        assert!(!conflict_in(
+            "fabric-language-kotlin-1.13.8%2Bkotlin.2.3.0.jar",
+            "1.21.11"
+        ));
     }
 
     // ---- round trip ----------------------------------------------------------
@@ -563,10 +707,16 @@ user_mods:
 
         c.edit_profile_at(&file, 8).expect("edit profile");
 
-        let doc = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&file).unwrap()).unwrap();
+        let doc =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&file).unwrap()).unwrap();
         let prof = &doc["profiles"]["fabric-loader-1.21.11"];
         assert_eq!(prof["name"], crate::PROFILE_NAME);
-        assert!(prof["icon"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(
+            prof["icon"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
         assert!(prof["javaArgs"].as_str().unwrap().contains("-Xmx8G"));
         // untouched fields preserved
         assert_eq!(prof["lastVersionId"], "fabric-loader-0.18.4-1.21.11");
@@ -582,10 +732,17 @@ user_mods:
 
         c.edit_profile_at(&file, 4).expect("edit profile");
 
-        let doc = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&file).unwrap()).unwrap();
-        let args = doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"].as_str().unwrap().to_string();
+        let doc =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&file).unwrap()).unwrap();
+        let args = doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(args.contains("-Xmx4G"), "ram flag present: {args}");
-        assert!(args.contains("UseG1GC"), "default JVM tuning present: {args}");
+        assert!(
+            args.contains("UseG1GC"),
+            "default JVM tuning present: {args}"
+        );
     }
 
     #[test]

@@ -9,7 +9,11 @@ fn main() {
         .arg("-version")
         .output()
         .expect("java runs");
-    let version = String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("unknown").to_owned();
+    let version = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .next()
+        .unwrap_or("unknown")
+        .to_owned();
     println!("java reports: {version}");
     assert!(
         version.contains("17"),

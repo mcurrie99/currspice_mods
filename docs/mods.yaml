@@ -1,18 +1,31 @@
+# Canonical installer manifest. Hash records preserved from 2026-08-30 capture.
 path:
 mc_version: 1.21.11
 installer_version: 0.18.4
-fabric: https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.exe
+fabric: https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar
 server_mods:
-- https://cdn.modrinth.com/data/uCdwusMi/versions/GT3Bm3GN/DistantHorizons-2.4.5-b-1.21.11-fabric-neoforge.jar
-- https://cdn.modrinth.com/data/P7dR8mSH/versions/L34yYPTD/fabric-api-0.141.2%2B1.21.11.jar
-- https://cdn.modrinth.com/data/Ha28R6CL/versions/N6D3uiZF/fabric-language-kotlin-1.13.8%2Bkotlin.2.3.0.jar
-- https://cdn.modrinth.com/data/YL57xq9U/versions/Q4YiZeCX/iris-fabric-1.10.4%2Bmc1.21.11.jar
-- https://cdn.modrinth.com/data/lfHFW1mp/versions/X3DCfJx0/journeymap-fabric-1.21.11-6.0.0-beta.55.jar
-- https://cdn.modrinth.com/data/yBW8D80W/versions/5Tp7kdU0/lambdynamiclights-4.9.1%2B1.21.11.jar
-- https://cdn.modrinth.com/data/bEpr0Arc/versions/zoLjBabk/litematica-fabric-1.21.11-0.25.4.jar
-- https://cdn.modrinth.com/data/GcWjdA9I/versions/jsdKvp3x/malilib-fabric-1.21.11-0.27.5.jar
-- https://cdn.modrinth.com/data/AANobbMI/versions/59wygFUQ/sodium-fabric-0.8.2%2Bmc1.21.11.jar
-- https://cdn.modrinth.com/data/PtjYWJkn/versions/yqY1efrC/sodium-extra-fabric-0.8.3%2Bmc1.21.11.jar
-- https://cdn.modrinth.com/data/1eAoo2KR/versions/pHWDw3Vc/yet_another_config_lib_v3-3.8.2%2B1.21.11-fabric.jar
-- https://cdn.modrinth.com/data/w7ThoJFB/versions/YphN3CnL/zoomify-2.15.1%2B1.21.11.jar
+- url: https://cdn.modrinth.com/data/uCdwusMi/versions/GT3Bm3GN/DistantHorizons-2.4.5-b-1.21.11-fabric-neoforge.jar
+  sha256: 7694c7a17e55f5bef21b456c22a2b1c4e48060b37467dee2b71d4c12e586bc3f
+- url: https://cdn.modrinth.com/data/P7dR8mSH/versions/L34yYPTD/fabric-api-0.141.2%2B1.21.11.jar
+  sha256: 6c1d0c4fdd2d82b56073188e4cad2882c80e0ed9227ca373469a420d1cf6a974
+- url: https://cdn.modrinth.com/data/Ha28R6CL/versions/N6D3uiZF/fabric-language-kotlin-1.13.8%2Bkotlin.2.3.0.jar
+  sha256: 760953d8d3d1fa32a353593d744e2917d8a91ca8923ae9518b5ef2676a631002
+- url: https://cdn.modrinth.com/data/YL57xq9U/versions/Q4YiZeCX/iris-fabric-1.10.4%2Bmc1.21.11.jar
+  sha256: f18f24bf96e1a347a53f65ff500bad2e7eee95f0f50cdf703713c29ee7be3f9e
+- url: https://cdn.modrinth.com/data/lfHFW1mp/versions/X3DCfJx0/journeymap-fabric-1.21.11-6.0.0-beta.55.jar
+  sha256: 6f27dce46441b71d233dac183d288080f5342844decba6570ceb9028faab0104
+- url: https://cdn.modrinth.com/data/yBW8D80W/versions/5Tp7kdU0/lambdynamiclights-4.9.1%2B1.21.11.jar
+  sha256: 99bcfbb13cbd7c98ec9574c2959a1c6a145aac26efed54bcb32ebf08abf9282c
+- url: https://cdn.modrinth.com/data/bEpr0Arc/versions/zoLjBabk/litematica-fabric-1.21.11-0.25.4.jar
+  sha256: 403af38852a99ced651a8df0a508748090a453215c89219db7bd715ca74215a8
+- url: https://cdn.modrinth.com/data/GcWjdA9I/versions/jsdKvp3x/malilib-fabric-1.21.11-0.27.5.jar
+  sha256: 90b9106a3d80cdd8ec0a36ee45f62fa4ebf8a1f49bfab3c746f0dc6b945fb5c5
+- url: https://cdn.modrinth.com/data/AANobbMI/versions/59wygFUQ/sodium-fabric-0.8.2%2Bmc1.21.11.jar
+  sha256: d89173494ac89676d43cc9c330607fc07cf44a145e84e8d07374c2b370f0b87c
+- url: https://cdn.modrinth.com/data/PtjYWJkn/versions/yqY1efrC/sodium-extra-fabric-0.8.3%2Bmc1.21.11.jar
+  sha256: bd634e73fec7c84b47bf3d5701495c6b7d5d4104b81a75cb453346e9c2c92009
+- url: https://cdn.modrinth.com/data/1eAoo2KR/versions/pHWDw3Vc/yet_another_config_lib_v3-3.8.2%2B1.21.11-fabric.jar
+  sha256: 49c279bc28c80ca17d6c21c3dd299ec1c115b892272f21b3f034ed782829babd
+- url: https://cdn.modrinth.com/data/w7ThoJFB/versions/YphN3CnL/zoomify-2.15.1%2B1.21.11.jar
+  sha256: db1fc51806dab797e8f569964d41c76880bd6deb130147e5c8be33514d160cc8
 user_mods:

@@ -25,8 +25,35 @@ pub struct Mod {
 impl Mod {
     /// Build a mod whose final install location is `<directory>/<last URL segment>`.
     pub fn new(download: &str, directory: &Path) -> Result<Self, Box<dyn Error>> {
-        // Only supports .jar-style direct download links (v1 manifest shape).
-        let filename = Mod::extract_name(download).unwrap_or("Mod File.jar");
+        let url = reqwest::Url::parse(download)?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err("Expected an HTTPS artifact URL without credentials".into());
+        }
+        let filename = url
+            .path_segments()
+            .and_then(|mut s| s.next_back())
+            .ok_or("Missing artifact filename")?;
+        let lower = filename.to_ascii_lowercase();
+        let stem = lower.split('.').next().unwrap_or("");
+        let reserved = ["con", "prn", "aux", "nul"].contains(&stem)
+            || (stem.len() == 4
+                && (stem.starts_with("com") || stem.starts_with("lpt"))
+                && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+        if !lower.ends_with(".jar")
+            || filename
+                .chars()
+                .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+            || ["%2f", "%5c", "%3a", "%00"]
+                .iter()
+                .any(|bad| lower.contains(bad))
+            || reserved
+        {
+            return Err(format!("Unsafe jar filename: {filename}").into());
+        }
         Ok(Mod {
             name: filename.to_string(),
             download: download.to_string(),
@@ -55,59 +82,94 @@ impl Mod {
     /// name on disk. Handles both `/` (URLs) and `\` (Windows paths);
     /// percent-encoding is preserved (keeps names valid on any OS).
     pub fn extract_name(link: &str) -> Option<&str> {
-        // Skip trailing separators, then walk back to the previous
-        // separator: the span in between is the last real segment.
-        // (Scanning from the tail first is what keeps us away from the
-        // leading "https:" scheme — the bug class this used to trip over.)
-        // A URL ending in "/" therefore names nothing.
-        let chars: Vec<char> = link.chars().collect();
-        let is_sep = |c: char| c == '/' || c == '\\';
-        let mut end = chars.len();
-        while end > 0 && is_sep(chars[end - 1]) {
-            end -= 1;
-        }
-        if end == 0 {
-            return None;
-        }
-        let mut start = end;
-        while start > 0 && !is_sep(chars[start - 1]) {
-            start -= 1;
-        }
-        Some(&link[start..end])
+        let name = link
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()?;
+        (!name.is_empty()).then_some(name)
     }
 
     fn part_name(name: &str) -> String {
         format!("{name}.part")
     }
 
-    /// Download to a `.part` file, verify the optional sha256, then move it
-    /// into place. Never leaves a half-written jar at the final path.
-    pub fn download_verified(&mut self, expected_sha256: Option<&str>) -> Result<(), Box<dyn Error>> {
-        let file_name = self
-            .path
-            .file_name()
-            .ok_or_else(|| "mod has no file name".to_string())?
-            .to_string_lossy()
-            .to_string();
-        let part = self.path.with_file_name(Self::part_name(&file_name));
-
-        let response = reqwest::blocking::get(&self.download)?;
-        let content = response.bytes()?;
-
-        if let Some(hex) = expected_sha256.map(str::trim).filter(|h| !h.is_empty()) {
-            let digest = sha256_hex(&content);
-            if !digest.eq_ignore_ascii_case(hex) {
-                let _ = fs::remove_file(&part);
-                return Err(format!(
-                    "checksum for {} does not match\n    expected {hex}\n    got      {digest}\n    link   {}",
-                    self.name, self.download
-                ).into());
+    /// Atomically install verified content, retrying a checksum failure once.
+    pub fn install(
+        &mut self,
+        expected: Option<&str>,
+        transport: &mut dyn crate::download::Transport,
+    ) -> Result<crate::download::Outcome, crate::download::InstallError> {
+        use crate::download::{InstallError, Outcome, file_sha256};
+        if let Some(hash) = expected
+            && (hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())) {
+                return Err(InstallError::Config(format!(
+                    "Invalid SHA-256 for {}",
+                    self.name
+                )));
+            }
+        let existed = self.path.try_exists()?;
+        if existed && self.path.is_file() {
+            if let Some(hash) = expected {
+                if file_sha256(&self.path)?.eq_ignore_ascii_case(hash) {
+                    return Ok(Outcome::Skipped);
+                }
+            } else if crate::download::valid_jar(&self.path) {
+                return Ok(Outcome::Skipped);
             }
         }
+        let stale = self.path.with_file_name(Self::part_name(&self.name));
+        if stale.try_exists()? {
+            fs::remove_file(stale)?;
+        }
+        for attempt in 0..2 {
+            let parent = self
+                .path
+                .parent()
+                .ok_or_else(|| InstallError::Config("Missing destination directory".into()))?;
+            let mut part = tempfile::Builder::new()
+                .prefix(".currspice-")
+                .suffix(".part")
+                .tempfile_in(parent)?;
+            transport.fetch(&self.download, part.as_file_mut())?;
+            part.as_file_mut().sync_all()?;
+            if let Some(hash) = expected {
+                let actual = file_sha256(part.path())?;
+                if !actual.eq_ignore_ascii_case(hash) {
+                    if attempt == 0 {
+                        continue;
+                    }
+                    return Err(InstallError::Verify(format!(
+                        "Checksum failed for {} after two attempts: expected {hash}, got {actual}; URL {}",
+                        self.name, self.download
+                    )));
+                }
+            }
+            if part.as_file().metadata()?.len() == 0 {
+                return Err(InstallError::Verify(format!(
+                    "Empty download for {}",
+                    self.name
+                )));
+            }
+            if expected.is_none() && !crate::download::valid_jar(part.path()) {
+                return Err(InstallError::Verify(format!(
+                    "Invalid jar archive for {}",
+                    self.name
+                )));
+            }
+            part.persist(&self.path)
+                .map_err(|e| InstallError::Install(e.to_string()))?;
+            self.installed = true;
+            return Ok(if existed {
+                Outcome::Replaced
+            } else {
+                Outcome::Installed
+            });
+        }
+        unreachable!("two attempts always return")
+    }
 
-        fs::write(&part, &content)?;
-        fs::rename(&part, &self.path)?;
-        self.installed = true;
+    pub fn download_verified(&mut self, expected: Option<&str>) -> Result<(), Box<dyn Error>> {
+        self.install(expected, &mut crate::download::HttpTransport::new()?)?;
         Ok(())
     }
 
@@ -157,14 +219,50 @@ pub struct Fabric {
 }
 
 impl Fabric {
+    fn jar_url(raw: &str) -> Result<String, Box<dyn Error>> {
+        let mut url = reqwest::Url::parse(raw)?;
+        if url.path().ends_with(".exe") {
+            if url.host_str() != Some("maven.fabricmc.net")
+                || !url.path().starts_with("/net/fabricmc/fabric-installer/")
+            {
+                return Err(
+                    "Legacy .exe URL must be an official Fabric Maven installer; use its .jar URL"
+                        .into(),
+                );
+            }
+            let path = format!("{}.jar", url.path().trim_end_matches(".exe"));
+            url.set_path(&path);
+        }
+        Ok(url.into())
+    }
+
+    pub fn verify_profile(&self) -> Result<(), crate::download::InstallError> {
+        use crate::download::InstallError;
+        let check = || -> Result<(), Box<dyn Error>> {
+            let doc: serde_json::Value =
+                serde_json::from_slice(&fs::read(self.mc_dir.join("launcher_profiles.json"))?)?;
+            let name = crate::fabric_profile_name(&self.mc_version);
+            let profile = doc
+                .get("profiles")
+                .and_then(|p| p.get(&name))
+                .and_then(|p| p.as_object())
+                .ok_or("Fabric profile is missing or invalid")?;
+            let expected = format!("fabric-loader-{}-{}", self.inst_version, self.mc_version);
+            if profile.get("lastVersionId").and_then(|v| v.as_str()) != Some(expected.as_str()) {
+                return Err(format!("Fabric profile must select {expected}").into());
+            }
+            Ok(())
+        };
+        check().map_err(|e| InstallError::Verify(format!("Fabric verification failed: {e}")))
+    }
+
     pub fn from_config(config: &crate::config::Config) -> Result<Self, Box<dyn Error>> {
-        let mc_dir = PathBuf::from(config.get_path());
-        Ok(Fabric {
-            mc_version: config.get_mc_version().to_string(),
-            inst_version: config.get_installer_version().to_string(),
-            installer: Mod::new(config.get_fabric_url(), &mc_dir)?,
-            mc_dir,
-        })
+        Self::new(
+            config.get_mc_version(),
+            config.get_installer_version(),
+            config.get_fabric_url(),
+            Path::new(config.get_path()),
+        )
     }
 
     pub fn new(
@@ -176,7 +274,7 @@ impl Fabric {
         Ok(Fabric {
             mc_version: mc_version.to_string(),
             inst_version: inst_version.to_string(),
-            installer: Mod::new(installer_url, mc_dir)?,
+            installer: Mod::new(&Self::jar_url(installer_url)?, mc_dir)?,
             mc_dir: mc_dir.to_path_buf(),
         })
     }
@@ -250,7 +348,10 @@ impl Fabric {
     /// never need a Java install of their own.
     pub fn run_installer(&self, java_bin: &Path) -> Result<(), Box<dyn Error>> {
         let args = self.installer_command();
-        eprintln!("Currspice: running {}", [java_bin.display().to_string(), args.join(" ")].join(" "));
+        eprintln!(
+            "Currspice: running {}",
+            [java_bin.display().to_string(), args.join(" ")].join(" ")
+        );
 
         let status = std::process::Command::new(java_bin)
             .args(&args)
@@ -268,15 +369,7 @@ impl Fabric {
             ).into());
         }
 
-        // Verify the success contract instead of trusting the exit code.
-        let profiles = fs::read_to_string(self.mc_dir.join("launcher_profiles.json"))
-            .map_err(|e| format!("installer exited OK but launcher_profiles.json is unreadable: {e}"))?;
-        if !profiles.contains(&crate::fabric_profile_name(&self.mc_version)) {
-            return Err(format!(
-                "the installer exited OK but the '{}' profile is missing from launcher_profiles.json — the install did not complete. Re-run, or delete the partial install and retry.",
-                crate::fabric_profile_name(&self.mc_version)
-            ).into());
-        }
+        self.verify_profile()?;
         Ok(())
     }
 
@@ -307,7 +400,10 @@ mod tests {
         let f = Fabric::from_config(&cfg).expect("from_config");
         assert_eq!(f.get_mc_version(), "1.21.11");
         assert_eq!(f.get_inst_version(), "0.18.4");
-        assert_eq!(f.installer().path(), Path::new("C:/mc").join("fabric-installer-1.0.3.jar"));
+        assert_eq!(
+            f.installer().path(),
+            Path::new("C:/mc").join("fabric-installer-1.0.3.jar")
+        );
     }
 
     fn expected_installer_path() -> String {
@@ -354,20 +450,45 @@ mod tests {
         assert!(Mod::extract_name("").is_none());
         // Real-world: the last path segment of a Modrinth jar URL.
         assert_eq!(
-            Mod::extract_name("https://cdn.modrinth.com/data/x/versions/y/sodium-0.8.2%2Bmc1.21.11.jar"),
+            Mod::extract_name(
+                "https://cdn.modrinth.com/data/x/versions/y/sodium-0.8.2%2Bmc1.21.11.jar"
+            ),
             Some("sodium-0.8.2%2Bmc1.21.11.jar")
         );
         // Last non-empty segment over either separator (URLs and pasted
         // Windows paths both work); a bare filename is its own name.
         assert_eq!(Mod::extract_name("https://host/a/b/"), Some("b"));
-        assert_eq!(Mod::extract_name(r"C:\mods\zoomify.jar"), Some("zoomify.jar"));
+        assert_eq!(
+            Mod::extract_name(r"C:\mods\zoomify.jar"),
+            Some("zoomify.jar")
+        );
         assert_eq!(Mod::extract_name("soundpack.jar"), Some("soundpack.jar"));
     }
 
     #[test]
-    fn new_defaults_filename_when_unextractable() {
-        let m = Mod::new("", Path::new("C:/mods")).expect("default");
-        assert_eq!(m.get_name(), "Mod File.jar");
+    fn new_rejects_unsafe_filenames() {
+        for url in [
+            "",
+            "https://host/",
+            "https://host/../",
+            "https://host/CON.jar",
+            "https://host/a:b.jar",
+            "https://host/a%2fb.jar",
+            "http://host/a.jar",
+            "https://u:p@host/a.jar",
+        ] {
+            assert!(
+                Mod::new(url, Path::new("C:/mods")).is_err(),
+                "accepted {url}"
+            );
+        }
+        assert_eq!(
+            Mod::new("https://host/é.jar?q=1", Path::new("C:/mods"))
+                .unwrap()
+                .get_name(),
+            "%C3%A9.jar"
+        );
+        assert_eq!(Mod::extract_name("https://host/é.jar"), Some("é.jar"));
     }
 
     #[test]
@@ -393,8 +514,16 @@ mod tests {
         let f = Fabric::new("1.21.11", "0.18.4", "https://example.com/f.jar", dir.path()).unwrap();
         f.seed_launcher_profile().expect("seed");
 
-        let doc = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(dir.path().join("launcher_profiles.json")).unwrap()).unwrap();
-        assert!(doc["profiles"].as_object().map(|o| o.is_empty()).unwrap_or(false));
+        let doc = serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(dir.path().join("launcher_profiles.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            doc["profiles"]
+                .as_object()
+                .map(|o| o.is_empty())
+                .unwrap_or(false)
+        );
         assert_eq!(doc["launcherVersion"], "1.21.11");
     }
 
@@ -403,11 +532,21 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let f = Fabric::new("1.21.11", "0.18.4", "https://example.com/f.jar", dir.path()).unwrap();
         let existing = serde_json::json!({"profiles": {"keep-me": {"x": 1}}});
-        fs::write(dir.path().join("launcher_profiles.json"), existing.to_string()).unwrap();
+        fs::write(
+            dir.path().join("launcher_profiles.json"),
+            existing.to_string(),
+        )
+        .unwrap();
 
         f.seed_launcher_profile().expect("seed (no-op)");
-        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.path().join("launcher_profiles.json")).unwrap()).unwrap();
-        assert!(doc["profiles"].get("keep-me").is_some(), "existing content must survive");
+        let doc: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("launcher_profiles.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            doc["profiles"].get("keep-me").is_some(),
+            "existing content must survive"
+        );
     }
 
     #[test]
@@ -425,7 +564,7 @@ mod tests {
     #[test]
     fn is_installed_reflects_file_presence() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut m = Mod::new("https://host/mod.jar", dir.path()).unwrap();
+        let m = Mod::new("https://host/mod.jar", dir.path()).unwrap();
         assert!(!m.is_installed());
         fs::write(m.path(), b"jar").unwrap();
         assert!(m.is_installed());

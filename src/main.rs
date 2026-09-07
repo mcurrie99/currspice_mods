@@ -106,7 +106,9 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
         }
     };
     // Phase-0 drift guard: one MC version, all mods must target it.
-    config.verify_version_consistency().map_err(|e| (EXIT_CONFIG, e.to_string()))?;
+    config
+        .verify_version_consistency()
+        .map_err(|e| (EXIT_CONFIG, e.to_string()))?;
     println!(
         "Currspice: manifest OK — Minecraft {}, {}",
         config.get_mc_version(),
@@ -123,12 +125,20 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
             if !p.is_dir() {
                 return Err((
                     EXIT_CONFIG,
-                    format!("no Minecraft directory found at {} (double-check the path, or pass --mc-dir again)", p.display()),
+                    format!(
+                        "no Minecraft directory found at {} (double-check the path, or pass --mc-dir again)",
+                        p.display()
+                    ),
                 ));
             }
             p.clone()
         }
-        None => guess_minecraft_dir().map_err(|e| (EXIT_CONFIG, format!("{e}\nTip: if yours lives elsewhere, pass it with --mc-dir.")))?,
+        None => guess_minecraft_dir().map_err(|e| {
+            (
+                EXIT_CONFIG,
+                format!("{e}\nTip: if yours lives elsewhere, pass it with --mc-dir."),
+            )
+        })?,
     };
     config.set_path(mc_dir.display().to_string());
     println!("Currspice: Minecraft directory: {}", mc_dir.display());
@@ -148,39 +158,55 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
     }
 
     // 3. Fabric: own Java → download installer → seed profile → run → verify.
-    let mut fabric = Fabric::from_config(&config)
-        .map_err(|e| (EXIT_CONFIG, format!("could not set up the Fabric install: {e}")))?;
+    let mut fabric = Fabric::from_config(&config).map_err(|e| {
+        (
+            EXIT_CONFIG,
+            format!("could not set up the Fabric install: {e}"),
+        )
+    })?;
     println!(
         "Currspice: installing Fabric (client {} / loader {})",
         fabric.get_mc_version(),
         fabric.get_inst_version()
     );
     let allow_download = !cli.no_download;
-    let java_bin =
-        currspice_mods::jre::ensure_java(allow_download).map_err(|e| (EXIT_INSTALL, e.to_string()))?;
+    let java_bin = currspice_mods::jre::ensure_java(allow_download)
+        .map_err(|e| (EXIT_INSTALL, e.to_string()))?;
     fabric.download().map_err(|e| {
         (
             EXIT_NETWORK,
             format!("could not download the Fabric installer: {e}\nThat's a network problem on our side of things — re-run in a minute."),
         )
     })?;
+    fabric.seed_launcher_profile().map_err(|e| {
+        (
+            EXIT_INSTALL,
+            format!("could not prepare the launcher profile file: {e}"),
+        )
+    })?;
     fabric
-        .seed_launcher_profile()
-        .map_err(|e| (EXIT_INSTALL, format!("could not prepare the launcher profile file: {e}")))?;
-    fabric.run_installer(&java_bin).map_err(|e| (EXIT_INSTALL, e.to_string()))?;
+        .run_installer(&java_bin)
+        .map_err(|e| (EXIT_INSTALL, e.to_string()))?;
     println!("Currspice: Fabric profile installed");
 
     // 4. Launcher profile: size the heap, brand the profile.
     let alloc = determine_ram_alloc(2.0);
-    config
-        .edit_profile(alloc)
-        .map_err(|e| (EXIT_INSTALL, format!("could not update the launcher profile: {e}")))?;
+    config.edit_profile(alloc).map_err(|e| {
+        (
+            EXIT_INSTALL,
+            format!("could not update the launcher profile: {e}"),
+        )
+    })?;
     println!("Currspice: launcher profile set ({alloc} GB heap, name + icon)");
 
     // 5. Mods: server mods, then user mods. Idempotent by presence.
     let mods_dir = mc_dir.join("mods");
-    fs::create_dir_all(&mods_dir)
-        .map_err(|e| (EXIT_INSTALL, format!("could not create the mods folder: {e}")))?;
+    fs::create_dir_all(&mods_dir).map_err(|e| {
+        (
+            EXIT_INSTALL,
+            format!("could not create the mods folder: {e}"),
+        )
+    })?;
 
     let links: Vec<_> = config.all_mods().collect();
     let total = links.len();
@@ -193,7 +219,12 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
             already_ok.push(modder.get_name().to_string());
             continue;
         }
-        println!("Currspice: mod {}/{} — downloading {}", i + 1, total, modder.get_name());
+        println!(
+            "Currspice: mod {}/{} — downloading {}",
+            i + 1,
+            total,
+            modder.get_name()
+        );
         modder.download().map_err(|e| {
             (
                 EXIT_NETWORK,
@@ -204,7 +235,12 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
     }
 
     // 6. Tidy up the Fabric installer jar.
-    fabric.delete().map_err(|e| (EXIT_VERIFY, format!("could not clean up the Fabric installer: {e}")))?;
+    fabric.delete().map_err(|e| {
+        (
+            EXIT_VERIFY,
+            format!("could not clean up the Fabric installer: {e}"),
+        )
+    })?;
 
     // 7. Summary.
     let mut summary = String::new();
@@ -215,7 +251,11 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
         config.get_mc_version(),
         config.get_installer_version()
     );
-    let _ = writeln!(summary, "  - Launcher profile: \"{}\" (up to {alloc} GB)", currspice_mods::PROFILE_NAME);
+    let _ = writeln!(
+        summary,
+        "  - Launcher profile: \"{}\" (up to {alloc} GB)",
+        currspice_mods::PROFILE_NAME
+    );
     for name in &installed_now {
         let _ = writeln!(summary, "  - mod installed: {name}");
     }
