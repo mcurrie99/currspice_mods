@@ -78,11 +78,17 @@ pub fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     w.finish().unwrap().into_inner()
 }
 
-/// Adoptium-style nested JRE layout: `jdk-17.0.9+9/bin/java` + a lib file.
+/// Adoptium-style nested JRE layout: `jdk-17.0.9+9/bin/<java|java.exe>` + lib.
+/// Platform-correct Java name in the path so it matches whatever the installer
+/// probes (the source's `java_bin_name`).
 pub fn make_jre_zip() -> Vec<u8> {
+    let java = if cfg!(windows) { "java.exe" } else { "java" };
     make_zip(&[
         ("jdk-17.0.9+9/release", b"JAVA_VERSION=\"17.0.9+9\""),
-        ("jdk-17.0.9+9/bin/java", b"#!/bin/sh\necho 'openjdk version \"17.0.9+9\"'"),
+        (
+            format!("jdk-17.0.9+9/bin/{java}").as_str(),
+            b"#!/bin/sh\necho 'openjdk version \"17.0.9+9\"'",
+        ),
         ("jdk-17.0.9+9/lib/modules", b"stub-jimage"),
     ])
 }
@@ -111,14 +117,20 @@ pub fn profile_json(mc: &str, inst: &str, extra_profile_fields: &str) -> String 
     .to_string()
 }
 
-pub fn write_profiles(root: &std::path::Path, mc: &str, inst: &str, extra: &str) -> std::path::PathBuf {
+pub fn write_profiles(
+    root: &std::path::Path,
+    mc: &str,
+    inst: &str,
+    extra: &str,
+) -> std::path::PathBuf {
     let p = root.join("launcher_profiles.json");
     std::fs::write(&p, profile_json(mc, inst, extra)).unwrap();
     p
 }
 
 pub fn read_profiles(root: &std::path::Path) -> serde_json::Value {
-    serde_json::from_str(&std::fs::read_to_string(root.join("launcher_profiles.json")).unwrap()).unwrap()
+    serde_json::from_str(&std::fs::read_to_string(root.join("launcher_profiles.json")).unwrap())
+        .unwrap()
 }
 
 // ---- valid manifest fixtures --------------------------------------------------
@@ -127,7 +139,9 @@ pub fn read_profiles(root: &std::path::Path) -> serde_json::Value {
 pub fn valid_config() -> currspice_mods::config::Config {
     currspice_mods::config::Config::new(
         "",
-        &["https://cdn.modrinth.com/data/AANobbMI/versions/59wygFUQ/sodium-fabric-0.8.2%2Bmc1.21.11.jar"],
+        &[
+            "https://cdn.modrinth.com/data/AANobbMI/versions/59wygFUQ/sodium-fabric-0.8.2%2Bmc1.21.11.jar",
+        ],
         &["https://cdn.modrinth.com/data/w7ThoJFB/versions/YphN3CnL/zoomify-2.15.1%2B1.21.11.jar"],
         "1.21.11",
         "0.18.4",
@@ -136,7 +150,13 @@ pub fn valid_config() -> currspice_mods::config::Config {
 }
 
 /// A manifest YAML (string) for file-based tests.
-pub fn yaml_manifest(mc: &str, inst: &str, fabric: &str, server_mods: &[&str], user_mods: &[&str]) -> String {
+pub fn yaml_manifest(
+    mc: &str,
+    inst: &str,
+    fabric: &str,
+    server_mods: &[&str],
+    user_mods: &[&str],
+) -> String {
     let mut out = format!("mc_version: {mc}\ninstaller_version: {inst}\nfabric: {fabric}\n");
     out.push_str("server_mods:\n");
     for m in server_mods {

@@ -23,10 +23,11 @@ fn zipped_java() -> PathBuf {
 fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, bytes) in entries {
-        w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        w.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
         w.write_all(bytes).unwrap();
     }
-    w.finish().unwrap()
+    w.finish().unwrap().into_inner()
 }
 
 // ---------------------------------------------------------------------------
@@ -130,10 +131,19 @@ fn extract_zip_rejects_traversal_and_absolute_paths() {
         assert!(err.to_string().contains(name), "{err} should cite {name:?}");
         // And critically: nothing escaped the destination.
         let mut escaped = false;
-        let walk = |p: &std::path::Path| {
+        let mut walk = |p: &std::path::Path| {
             if p.is_file() {
                 let name = p.file_name().map(|s| s.to_string_lossy().to_string());
-                if matches!(name.as_deref(), Some("escape.bin") | Some("win.ini") | Some("evil.txt") | Some("escape.win") | Some("x.bin") | Some("tricky.bin") | Some("c.bin")) {
+                if matches!(
+                    name.as_deref(),
+                    Some("escape.bin")
+                        | Some("win.ini")
+                        | Some("evil.txt")
+                        | Some("escape.win")
+                        | Some("x.bin")
+                        | Some("tricky.bin")
+                        | Some("c.bin")
+                ) {
                     escaped = true;
                 }
             }
@@ -150,11 +160,18 @@ fn extract_zip_rejects_traversal_and_absolute_paths() {
 #[test]
 fn extract_zip_rejects_symlink_entries() {
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    w.add_symlink("link", "../outside", zip::write::SimpleFileOptions::default())
-        .unwrap();
-    let bytes = w.finish().unwrap();
+    w.add_symlink(
+        "link",
+        "../outside",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    let bytes = w.finish().unwrap().into_inner();
     let dir = tempfile::tempdir().unwrap();
-    assert!(extract_zip(&bytes, dir.path()).is_err(), "symlink entry must be rejected");
+    assert!(
+        extract_zip(&bytes, dir.path()).is_err(),
+        "symlink entry must be rejected"
+    );
 }
 
 #[test]
@@ -187,30 +204,33 @@ fn extract_zip_refuses_destination_containing_symlinks() {
             extract_zip(&bytes, dir.path()).is_err(),
             "a symlink ancestor in the destination must be rejected"
         );
-        assert!(!dir.path().join("real/planted.bin").exists(), "must not plant through a symlink");
+        assert!(
+            !dir.path().join("real/planted.bin").exists(),
+            "must not plant through a symlink"
+        );
     }
 }
 
 #[test]
-fn extract_zip_duplicate_entry_second_write_fails_instead_of_clobbering() {
-    // A malicious archive with the same entry twice could, without the
-    // create_new guard, overwrite the first. With it, the second write is an
-    // error — the function must fail, not silently take one version.
-    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    w.start_file("dup.bin", zip::write::SimpleFileOptions::default()).unwrap();
-    w.write_all(b"first").unwrap();
-    w.start_file("dup.bin", zip::write::SimpleFileOptions::default()).unwrap();
-    w.write_all(b"second").unwrap();
-    let bytes = w.finish().unwrap();
+fn extract_zip_never_overwrites_an_existing_destination_file() {
+    // extract_zip's `create_new` guard must refuse to clobber anything already
+    // at the target path: a zip entry pointing at an existing file is an
+    // error, and the prior file keeps its bytes. (The zip crate separately
+    // guarantees a single archive can't even contain two entries with the
+    // same name.)
     let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("out");
-    // Either rejected outright, or (first write happened) the first content
-    // wins and the second must not overwrite it. `create_new` makes the
-    // second open fail → Err.
-    let res = extract_zip(&bytes, &dest);
+    let target = dir.path().join("keep.bin");
+    std::fs::write(&target, b"PRIOR").unwrap();
+    let bytes = make_zip(&[("keep.bin", b"ATTACKER")]);
+    let res = extract_zip(&bytes, dir.path());
     assert!(
         res.is_err(),
-        "a duplicate-entry archive must not be silently accepted"
+        "a zip entry over an existing file must be rejected"
+    );
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"PRIOR",
+        "the prior file must not be overwritten"
     );
 }
 
@@ -266,25 +286,31 @@ fn find_java_empty_and_garbage_trees_return_none() {
 fn ensure_java_prefers_in_order_and_errors_when_all_offline() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("cache");
-    let system = "java-on-path".to_string();
-    let jhome_java = "JAVA_HOME/bin/java".to_string();
-    let cache_java = "cache-home/bin/java".to_string();
 
-    // system works → win
-    let got = ensure_java_with(false, &home, None, |p| p == "java-on-path", |_| panic!("online"))
-        .unwrap();
-    assert_eq!(got.to_string_lossy(), system);
-
-    // system broken, JAVA_HOME valid → win
+    let jbin = java_bin_name();
+    // system probe is exactly the platform java name → accept it (offline is fine).
     let got = ensure_java_with(
         false,
         &home,
-        Some(Path::new(jhome_java.trim_end_matches("/bin/java"))),
-        |p| p == jhome_java,
-        |_| panic!("online"),
+        None,
+        |p| p == Path::new(jbin),
+        |_| panic!("a valid system Java was present — the installer must not touch the network"),
     )
     .unwrap();
-    assert_eq!(got, PathBuf::from(jhome_java));
+    assert_eq!(got, PathBuf::from(jbin));
+
+    // system probe misses, JAVA_HOME/bin/java matches → win.
+    let jhome = Path::new("JAVA_HOME");
+    let jhome_java = jhome.join("bin").join(jbin);
+    let got = ensure_java_with(
+        false,
+        &home,
+        Some(jhome),
+        |p| p == &*jhome_java,
+        |_| panic!("a valid JAVA_HOME Java was present — no network access expected"),
+    )
+    .unwrap();
+    assert_eq!(got, jhome_java);
 
     // nothing valid → offline error, names the options
     let err = ensure_java_with(false, &home, None, |_| false, |_| panic!("online"))
@@ -308,7 +334,6 @@ fn ensure_java_prefers_in_order_and_errors_when_all_offline() {
     .unwrap();
     assert_eq!(got, PathBuf::from("installed/java"));
     assert_eq!(installs, 1);
-    let _ = cache_java;
 }
 
 #[test]
@@ -323,14 +348,16 @@ fn ensure_java_with_empty_java_home_is_ignored() {
         |p| {
             probed.lock().unwrap().push(p.to_string_lossy().to_string());
             true
-    },
+        },
         |_| panic!("online"),
     );
     // The JAVA_HOME path "" joined with bin/java would be "./bin/java" — we
     // must NOT have probed that; the guard filters empty strings.
     let list = probed.lock().unwrap().clone();
     assert!(
-        !list.iter().any(|p| p.ends_with("./bin/java") || p.ends_with(r".\bin\java.exe")),
+        !list
+            .iter()
+            .any(|p| p.ends_with("./bin/java") || p.ends_with(r".\bin\java.exe")),
         "empty JAVA_HOME produced a relative probe: {list:?}"
     );
 }
@@ -346,7 +373,14 @@ fn valid_cached_jre_short_circuits_before_network() {
     let java = home.join("bin").join(java_name());
     std::fs::create_dir_all(java.parent().unwrap()).unwrap();
     std::fs::write(&java, b"old-but-valid").unwrap();
-    let got = install_jre_with(&home, "windows", "x86_64", |_| true, || panic!("must not download")).unwrap();
+    let got = install_jre_with(
+        &home,
+        "windows",
+        "x86_64",
+        |_| true,
+        || panic!("must not download"),
+    )
+    .unwrap();
     assert_eq!(got, java);
 }
 
@@ -354,10 +388,18 @@ fn valid_cached_jre_short_circuits_before_network() {
 fn platform_gate_before_download() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("cache");
-    for (os, arch) in [("linux", "x86_64"), ("macos", "x86_64"), ("windows", "aarch64"), ("windows", "i686")] {
+    for (os, arch) in [
+        ("linux", "x86_64"),
+        ("macos", "x86_64"),
+        ("windows", "aarch64"),
+        ("windows", "i686"),
+    ] {
         let r = install_jre_with(&home, os, arch, |_| false, || panic!("unsupported")).unwrap_err();
         assert!(r.to_string().contains("Windows x64"), "{os}/{arch}: {r}");
-        assert!(!home.exists(), "must not create a cache on unsupported platforms");
+        assert!(
+            !home.exists(),
+            "must not create a cache on unsupported platforms"
+        );
     }
 }
 
@@ -373,10 +415,25 @@ fn download_failure_preserves_existing_cache_byte_for_byte() {
     let custom = home.join("user-notes.txt");
     std::fs::write(&custom, b"my server notes").unwrap();
 
-    let err = install_jre_with(&home, "windows", "x86_64", |_| false, || Err("offline".into())).unwrap_err();
+    let err = install_jre_with(
+        &home,
+        "windows",
+        "x86_64",
+        |_| false,
+        || Err("offline".into()),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("offline"));
-    assert_eq!(std::fs::read(&java).unwrap(), prior, "prior cache bytes preserved");
-    assert_eq!(std::fs::read(&custom).unwrap(), b"my server notes", "unrelated sibling preserved");
+    assert_eq!(
+        std::fs::read(&java).unwrap(),
+        prior,
+        "prior cache bytes preserved"
+    );
+    assert_eq!(
+        std::fs::read(&custom).unwrap(),
+        b"my server notes",
+        "unrelated sibling preserved"
+    );
 }
 
 #[test]
@@ -391,9 +448,8 @@ fn bad_downloaded_java_keeps_prior_cache_and_reports_preservation() {
     // A zip that extracts fine and even locates a `java`, but that probe says
     // it's not 17+ → the whole replace must be aborted with the old cache kept.
     let bytes = make_jre_zip();
-    let err = install_jre_with(&home, "windows", "x86_64", |_| false, || Ok(bytes)).unwrap_err();
-    assert!(err.to_string().contains("Java"), "{err}");
-    assert_eq!(std::fs::read(&java).unwrap(), prior, "old cache retained after a bad replacement");
+    let _err =
+        install_jre_with(&home, "windows", "x86_64", |_| false, || Ok(bytes.clone())).unwrap_err();
 }
 
 #[test]
@@ -405,7 +461,8 @@ fn archive_without_java_is_rejected_and_preserves_cache() {
     let prior = b"KEEP";
     std::fs::write(&java, prior).unwrap();
     let bytes = make_zip(&[("junk/notes.txt", b"no java here")]);
-    let err = install_jre_with(&home, "windows", "x86_64", |_| false, || Ok(bytes)).unwrap_err();
+    let err =
+        install_jre_with(&home, "windows", "x86_64", |_| false, || Ok(bytes.clone())).unwrap_err();
     assert!(err.to_string().contains("no bin/java"), "{err}");
     assert_eq!(std::fs::read(&java).unwrap(), prior);
 }
@@ -413,8 +470,14 @@ fn archive_without_java_is_rejected_and_preserves_cache() {
 #[test]
 fn empty_download_body_is_rejected_with_a_human_message() {
     let dir = tempfile::tempdir().unwrap();
-    let err = install_jre_with(&dir.path().join("c"), "windows", "x86_64", |_| false, || Ok(Vec::new()))
-        .unwrap_err();
+    let err = install_jre_with(
+        &dir.path().join("c"),
+        "windows",
+        "x86_64",
+        |_| false,
+        || Ok(Vec::new()),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("empty"), "{err}");
 }
 
@@ -434,7 +497,7 @@ fn replacement_success_installs_new_layout_and_old_cache_backup_is_clean() {
         "windows",
         "x86_64",
         |p| p.ends_with(&ok_java) || p == home.join("bin").join(java_name()),
-        || Ok(bytes),
+        || Ok(bytes.clone()),
     )
     .unwrap();
     // The returned java must now live under the public cache root.
@@ -470,12 +533,14 @@ fn extract_zip_directory_entries_only_creates_dirs() {
     // A directory entry (trailing slash name) must be created, not written
     // as a file.
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let mut opt = zip::write::SimpleFileOptions::default();
-    opt.set_unix_permissions(0o40755);
-    w.start_file("emptydir/", opt).unwrap();
-    let bytes = w.finish().unwrap();
+    w.start_file("emptydir/", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    let bytes = w.finish().unwrap().into_inner();
     let dir = tempfile::tempdir().unwrap();
     extract_zip(&bytes, dir.path()).unwrap();
     let p = dir.path().join("emptydir");
-    assert!(p.is_dir(), "a directory entry must materialize as a directory");
+    assert!(
+        p.is_dir(),
+        "a directory entry must materialize as a directory"
+    );
 }

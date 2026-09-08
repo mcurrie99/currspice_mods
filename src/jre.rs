@@ -111,7 +111,8 @@ pub fn accepts_java_output(success: bool, stdout: &str, stderr: &str) -> bool {
         })
 }
 
-fn java_bin_name() -> &'static str {
+/// The platform Java executable name (`java` or `java.exe`).
+pub fn java_bin_name() -> &'static str {
     if cfg!(windows) { "java.exe" } else { "java" }
 }
 
@@ -199,9 +200,10 @@ pub fn install_jre_with(
     mut download: impl FnMut() -> Result<Vec<u8>, Box<dyn Error>>,
 ) -> Result<PathBuf, Box<dyn Error>> {
     if let Some(java) = cached_java(home)
-        && probe_java(&java) {
-            return Ok(java);
-        }
+        && probe_java(&java)
+    {
+        return Ok(java);
+    }
     if os != "windows" || arch != "x86_64" {
         return Err("Private Java provisioning supports Windows x64 only; install Java 17+ on PATH or set JAVA_HOME.".into());
     }

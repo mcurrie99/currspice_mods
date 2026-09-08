@@ -24,7 +24,10 @@ impl Transport for Fake {
     fn fetch(&mut self, url: &str, out: &mut dyn Write) -> Result<(), InstallError> {
         use InstallError::*;
         self.calls.push(url.to_string());
-        let body = self.bodies.pop_front().ok_or(Network("script exhausted".into()))?;
+        let body = self
+            .bodies
+            .pop_front()
+            .ok_or(Network("script exhausted".into()))?;
         out.write_all(&body)?;
         Ok(())
     }
@@ -82,9 +85,9 @@ impl Runtime for Runner {
                     ),
                 )
                 .unwrap();
+                Ok(())
             }
         }
-        Ok(())
     }
 }
 
@@ -92,10 +95,7 @@ impl Runtime for Runner {
 
 /// Builds a valid in-memory `Config` from (url, optional sha256) pairs.
 /// Borrowed args, so it composes with both array literals and Vecs at call sites.
-fn config(
-    server_mods: &[(&str, Option<&str>)],
-    user_mods: &[(&str, Option<&str>)],
-) -> Config {
+fn config(server_mods: &[(&str, Option<&str>)], user_mods: &[(&str, Option<&str>)]) -> Config {
     let mut yaml = String::new();
     yaml.push_str("mc_version: 1.21.11\ninstaller_version: 0.18.4\n");
     yaml.push_str("fabric: https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar\n");
@@ -118,8 +118,11 @@ fn config(
     serde_yaml::from_str(&yaml).expect("fixture config must parse")
 }
 
-fn opts(mc_dir: &Path, mut f: impl FnOnce(&mut Options)) -> Options {
-    let mut o = Options { mc_dir: mc_dir.to_path_buf(), ..Options::default() };
+fn opts(mc_dir: &Path, f: impl FnOnce(&mut Options)) -> Options {
+    let mut o = Options {
+        mc_dir: mc_dir.to_path_buf(),
+        ..Options::default()
+    };
     f(&mut o);
     o
 }
@@ -147,17 +150,23 @@ fn fresh_install_then_idempotent_rerun() {
     std::fs::create_dir_all(&mc).unwrap();
     seed(&mc);
     let hash = sha256_hex(b"MODBYTES");
-    let a = [
-        ("https://cdn.ex/data/1/versions/1/alpha-1.21.11.jar", Some(&hash)),
+    let user_hash = sha256_hex(b"USERMOD");
+    let a: [(&str, Option<&str>); 2] = [
+        (
+            "https://cdn.ex/data/1/versions/1/alpha-1.21.11.jar",
+            Some(&hash),
+        ),
         ("https://cdn.ex/data/2/versions/1/beta-1.21.11.jar", None),
     ];
-    let user = [("https://cdn.ex/data/3/versions/1/gamma-1.21.11.jar", Some(&sha256_hex(b"USERMOD")))]
-        .into_iter()
-        .collect::<Vec<_>>();
+    let user: [(&str, Option<&str>); 1] = [(
+        "https://cdn.ex/data/3/versions/1/gamma-1.21.11.jar",
+        Some(&user_hash),
+    )];
     let mut http = Fake::default();
-    http.push(b"MODBYTES".to_vec());
-    http.push(make_jar()); // unpinned beta: must be a valid jar
-    http.push(b"USERMOD".to_vec());
+    http.push(make_jar()); // fabric installer jar (first network artifact)
+    http.push(b"MODBYTES".to_vec()); // alpha (pinned)
+    http.push(make_jar()); // beta (unpinned, must be a valid jar)
+    http.push(b"USERMOD".to_vec()); // gamma (pinned)
     let mut runner = Runner::default();
 
     // run 1
@@ -172,11 +181,23 @@ fn fresh_install_then_idempotent_rerun() {
     assert_eq!(runner.java_calls, 1);
     // run 2 — everything current → all skipped, zero extra downloads
     http.reset_for_test();
-    let summary = install(config(&a, &user), &opts(&mc, |_| {}), &mut http, &mut runner).unwrap();
+    let summary = install(
+        config(&a, &user),
+        &opts(&mc, |_| {}),
+        &mut http,
+        &mut runner,
+    )
+    .unwrap();
     assert!(summary.contains("skipped: 3"), "{summary}");
-    assert!(http.calls.is_empty(), "a fully-up-to-date re-run must not touch the network");
+    assert!(
+        http.calls.is_empty(),
+        "a fully-up-to-date re-run must not touch the network"
+    );
     // both mods present and byte-exact
-    assert_eq!(std::fs::read(mc.join("mods").join("alpha-1.21.11.jar")).unwrap(), b"MODBYTES");
+    assert_eq!(
+        std::fs::read(mc.join("mods").join("alpha-1.21.11.jar")).unwrap(),
+        b"MODBYTES"
+    );
     assert_eq!(
         std::fs::read(mc.join("mods").join("gamma-1.21.11.jar")).unwrap(),
         b"USERMOD"
@@ -201,14 +222,19 @@ fn partial_staleness_only_replaces_the_stale_mods() {
     let h1 = sha256_hex(b"V1");
     let url1 = "https://cdn.ex/data/1/versions/1/alpha-1.21.11.jar";
     let mut http = Fake::default();
+    http.push(make_jar()); // fabric installer
     http.push(b"V1".to_vec());
-    install(config(&[(url1, Some(&h1))], &[]), &opts(&mc, |_| {}), &mut http, &mut Runner::default())
-        .unwrap();
+    install(
+        config(&[(url1, Some(&h1))], &[]),
+        &opts(&mc, |_| {}),
+        &mut http,
+        &mut Runner::default(),
+    )
+    .unwrap();
     // Now alpha's bytes go stale on disk (a CDN update the friend is missing).
     std::fs::write(mc.join("mods").join("alpha-1.21.11.jar"), b"STALE-ON-DISK").unwrap();
     let mut http = Fake::default();
-    http.push(b"V1".to_vec());
-    http.reset_for_test();
+    http.push(b"V1".to_vec()); // only the stale mod needs refetching (installer already on disk)
     let summary = install(
         config(&[(url1, Some(&h1))], &[]),
         &opts(&mc, |_| {}),
@@ -217,7 +243,10 @@ fn partial_staleness_only_replaces_the_stale_mods() {
     )
     .unwrap();
     assert!(summary.contains("replaced: 1"), "{summary}");
-    assert_eq!(std::fs::read(mc.join("mods").join("alpha-1.21.11.jar")).unwrap(), b"V1");
+    assert_eq!(
+        std::fs::read(mc.join("mods").join("alpha-1.21.11.jar")).unwrap(),
+        b"V1"
+    );
 }
 
 #[test]
@@ -239,8 +268,14 @@ fn dry_run_performs_no_side_effects() {
     assert_eq!(http.calls.len(), 0, "dry-run must not fetch");
     assert_eq!(runner.java_calls, 0, "dry-run must not launch java");
     assert_eq!(runner.fabric_calls, 0, "dry-run must not run fabric");
-    assert!(!mc.join("launcher_profiles.json").exists(), "dry-run must not seed a profile");
-    assert!(!mc.join("mods").exists(), "dry-run must not create the mods dir");
+    assert!(
+        !mc.join("launcher_profiles.json").exists(),
+        "dry-run must not seed a profile"
+    );
+    assert!(
+        !mc.join("mods").exists(),
+        "dry-run must not create the mods dir"
+    );
 }
 
 #[test]
@@ -264,7 +299,11 @@ fn no_download_fails_fast_before_any_change() {
     assert_eq!(runner.fabric_calls, 0);
     assert!(!mc.join("mods").exists());
     // launcher_profiles.json was seeded by the test setup, not by the pipeline
-    assert!(!mc.join("launcher_profiles.json").with_file_name("x.jar").exists());
+    assert!(
+        !mc.join("launcher_profiles.json")
+            .with_file_name("x.jar")
+            .exists()
+    );
 }
 
 #[test]
@@ -303,7 +342,10 @@ fn invalid_config_rejected_before_any_side_effect() {
     let mut runner = Runner::default();
     let err = install(cfg, &opts(&mc, |_| {}), &mut http, &mut runner).unwrap_err();
     assert_eq!(err.exit_code(), 1);
-    assert!(err.to_string().contains("1.21.11"), "drift message must name the offender: {err}");
+    assert!(
+        err.to_string().contains("1.21.11"),
+        "drift message must name the offender: {err}"
+    );
     assert!(http.calls.is_empty());
     assert!(runner.fabric_calls == 0);
 }
@@ -316,14 +358,20 @@ fn duplicate_mod_filenames_across_server_and_user_are_rejected() {
     seed(&mc);
     let cfg = config(
         &[("https://cdn.ex/data/1/versions/1/sodium-1.21.11.jar", None)],
-        &[("https://other.ex/data/2/versions/9/sodium-1.21.11.jar", None)],
+        &[(
+            "https://other.ex/data/2/versions/9/sodium-1.21.11.jar",
+            None,
+        )],
     );
     let mut http = Fake::default();
     let mut runner = Runner::default();
     let err = install(cfg, &opts(&mc, |_| {}), &mut http, &mut runner).unwrap_err();
     assert_eq!(err.exit_code(), 1);
     assert!(err.to_string().contains("Duplicate"), "{err}");
-    assert!(http.calls.is_empty(), "duplicate detection must prevent any download");
+    assert!(
+        http.calls.is_empty(),
+        "duplicate detection must prevent any download"
+    );
 }
 
 #[test]
@@ -333,6 +381,7 @@ fn fabric_failure_blocks_profile_edit_and_all_mod_installs() {
     std::fs::create_dir_all(&mc).unwrap();
     seed(&mc);
     let mut http = Fake::default();
+    http.push(make_jar()); // installer downloads before fabric runs
     let mut runner = Runner::default();
     *runner.fabric_outcome.lock().unwrap() = FabricOutcome::Fail;
     let err = install(
@@ -344,12 +393,19 @@ fn fabric_failure_blocks_profile_edit_and_all_mod_installs() {
     .unwrap_err();
     assert!(matches!(err, InstallError::Install(_)));
     assert_eq!(runner.fabric_calls, 1);
-    assert!(!mc.join("mods").exists(), "no mod may be installed after a failed fabric");
+    assert!(
+        !mc.join("mods").exists(),
+        "no mod may be installed after a failed fabric"
+    );
     // The profile edit never happens: the seeded doc is unchanged.
     let p = mc.join("launcher_profiles.json");
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
-    assert!(!doc["profiles"]["fabric-loader-1.21.11"].get("javaArgs").is_some());
+    assert!(
+        doc["profiles"]["fabric-loader-1.21.11"]
+            .get("javaArgs")
+            .is_none()
+    );
 }
 
 #[test]
@@ -359,6 +415,7 @@ fn fabric_no_profile_writes_blocks_everything_after_verify() {
     std::fs::create_dir_all(&mc).unwrap();
     seed(&mc);
     let mut http = Fake::default();
+    http.push(make_jar()); // installer
     let mut runner = Runner::default();
     *runner.fabric_outcome.lock().unwrap() = FabricOutcome::NoProfile;
     let err = install(
@@ -368,13 +425,19 @@ fn fabric_no_profile_writes_blocks_everything_after_verify() {
         &mut runner,
     )
     .unwrap_err();
-    assert_eq!(err.exit_code(), 4, "missing fabric profile is a Verify-class failure");
+    assert_eq!(
+        err.exit_code(),
+        4,
+        "missing fabric profile is a Verify-class failure"
+    );
     assert!(!mc.join("mods").exists());
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(mc.join("launcher_profiles.json")).unwrap())
             .unwrap();
     assert!(
-        !doc["profiles"]["fabric-loader-1.21.11"].get("javaArgs").is_some(),
+        doc["profiles"]["fabric-loader-1.21.11"]
+            .get("javaArgs")
+            .is_none(),
         "profile edit must not have happened"
     );
 }
@@ -388,8 +451,8 @@ fn installer_jar_is_downloaded_and_run_before_seed_needs_it() {
     std::fs::create_dir_all(&mc).unwrap();
     seed(&mc);
     let mut http = Fake::default();
-    http.push(b"INSTALLER-JAR".to_vec()); // fabric installer
-    http.push(b"MOD".to_vec());
+    http.push(make_jar()); // fabric installer (must be a valid jar)
+    http.push(make_jar()); // the mod (unpinned)
     let mut runner = Runner::default();
     let first_url = {
         install(
@@ -403,7 +466,9 @@ fn installer_jar_is_downloaded_and_run_before_seed_needs_it() {
     };
     assert_eq!(
         first_url.as_deref(),
-        Some("https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar"),
+        Some(
+            "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar"
+        ),
         "the fabric installer must be the first network artifact"
     );
 }
@@ -416,9 +481,15 @@ fn mods_dir_created_and_layout_is_canonical() {
     seed(&mc);
     let mod_url = "https://cdn.ex/data/obj/versions/x/iris-fabric-1.21.11.jar";
     let mut http = Fake::default();
-    http.push(make_jar());
-    install(config(&[(mod_url, None)], &[]), &opts(&mc, |_| {}), &mut http, &mut Runner::default())
-        .unwrap();
+    http.push(make_jar()); // fabric installer
+    http.push(make_jar()); // the mod (unpinned)
+    install(
+        config(&[(mod_url, None)], &[]),
+        &opts(&mc, |_| {}),
+        &mut http,
+        &mut Runner::default(),
+    )
+    .unwrap();
     let mods = mc.join("mods");
     assert!(mods.is_dir());
     assert!(mods.join("iris-fabric-1.21.11.jar").is_file());
@@ -434,10 +505,20 @@ fn unrelated_files_in_mc_root_survive_install() {
     std::fs::write(mc.join("server").join("world.dat"), b"KEEP-ME").unwrap();
     seed(&mc);
     let mut http = Fake::default();
-    http.push(make_jar());
-    install(config(&[("https://cdn.ex/mod-1.21.11.jar", None)], &[]), &opts(&mc, |_| {}), &mut http, &mut Runner::default()).unwrap();
+    http.push(make_jar()); // fabric installer
+    http.push(make_jar()); // the mod (unpinned)
+    install(
+        config(&[("https://cdn.ex/mod-1.21.11.jar", None)], &[]),
+        &opts(&mc, |_| {}),
+        &mut http,
+        &mut Runner::default(),
+    )
+    .unwrap();
     assert_eq!(std::fs::read(mc.join("options.txt")).unwrap(), b"fov:1.0");
-    assert_eq!(std::fs::read(mc.join("server").join("world.dat")).unwrap(), b"KEEP-ME");
+    assert_eq!(
+        std::fs::read(mc.join("server").join("world.dat")).unwrap(),
+        b"KEEP-ME"
+    );
 }
 
 #[test]
@@ -447,7 +528,8 @@ fn heap_gb_zero_is_clamped_to_one_in_profile_and_summary() {
     std::fs::create_dir_all(&mc).unwrap();
     seed(&mc);
     let mut http = Fake::default();
-    http.push(make_jar());
+    http.push(make_jar()); // fabric installer
+    http.push(make_jar()); // the mod (unpinned)
     let summary = install(
         config(&[("https://cdn.ex/mod-1.21.11.jar", None)], &[]),
         &opts(&mc, |o| o.heap_gb = 0),
@@ -455,13 +537,24 @@ fn heap_gb_zero_is_clamped_to_one_in_profile_and_summary() {
         &mut Runner::default(),
     )
     .unwrap();
-    assert!(summary.contains("(1 GB heap)"), "0 must clamp to at least 1: {summary}");
+    assert!(
+        summary.contains("(1 GB heap)"),
+        "0 must clamp to at least 1: {summary}"
+    );
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(mc.join("launcher_profiles.json")).unwrap())
             .unwrap();
-    let args = doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"].as_str().unwrap();
-    assert!(args.contains("-Xmx1G"), "profile must hold a ≥1G heap: {args}");
-    assert!(!args.contains("-Xmx0G"), "0G heap must never reach the profile: {args}");
+    let args = doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"]
+        .as_str()
+        .unwrap();
+    assert!(
+        args.contains("-Xmx1G"),
+        "profile must hold a ≥1G heap: {args}"
+    );
+    assert!(
+        !args.contains("-Xmx0G"),
+        "0G heap must never reach the profile: {args}"
+    );
 }
 
 #[test]
@@ -473,8 +566,12 @@ fn verbose_summary_is_still_the_human_facing_contract() {
     std::fs::create_dir_all(&mc).unwrap();
     seed(&mc);
     let pinned = sha256_hex(b"V");
-    let mods = [("https://cdn.ex/data/1/versions/1/vect-1.21.11.jar", Some(&pinned))];
+    let mods: [(&str, Option<&str>); 1] = [(
+        "https://cdn.ex/data/1/versions/1/vect-1.21.11.jar",
+        Some(&pinned),
+    )];
     let mut http = Fake::default();
+    http.push(make_jar()); // fabric installer
     http.push(b"V".to_vec());
     let mut runner = Runner::default();
     let summary = install(
@@ -485,7 +582,10 @@ fn verbose_summary_is_still_the_human_facing_contract() {
     )
     .unwrap();
     assert!(summary.contains("installed: 1"), "{summary}");
-    assert!(summary.contains("1 GB heap") || summary.contains(" GB heap"), "{summary}");
+    assert!(
+        summary.contains("1 GB heap") || summary.contains(" GB heap"),
+        "{summary}"
+    );
 }
 
 #[test]
@@ -504,14 +604,30 @@ fn two_consecutive_runs_are_bit_for_bit_identical() {
     ];
     for _ in 0..2 {
         let mut http = Fake::default();
+        http.push(make_jar()); // fabric installer (run 2 skips it; unused)
         http.push(b"A".to_vec());
         http.push(b"B".to_vec());
-        install(config(&mods, &[]), &opts(&mc, |_| {}), &mut http, &mut Runner::default()).unwrap();
+        install(
+            config(&mods, &[]),
+            &opts(&mc, |_| {}),
+            &mut http,
+            &mut Runner::default(),
+        )
+        .unwrap();
     }
-    let listing: Vec<_> = std::fs::read_dir(mc.join("mods")).unwrap().flatten().collect();
+    let listing: Vec<_> = std::fs::read_dir(mc.join("mods"))
+        .unwrap()
+        .flatten()
+        .collect();
     assert_eq!(listing.len(), 2, "exactly the two expected mods, no drift");
-    assert_eq!(std::fs::read(mc.join("mods").join("a1-1.21.11.jar")).unwrap(), b"A");
-    assert_eq!(std::fs::read(mc.join("mods").join("a2-1.21.11.jar")).unwrap(), b"B");
+    assert_eq!(
+        std::fs::read(mc.join("mods").join("a1-1.21.11.jar")).unwrap(),
+        b"A"
+    );
+    assert_eq!(
+        std::fs::read(mc.join("mods").join("a2-1.21.11.jar")).unwrap(),
+        b"B"
+    );
 }
 
 #[test]
@@ -522,13 +638,12 @@ fn summary_reports_per_run_outcome_counts_accurately() {
     seed(&mc);
     let h1 = sha256_hex(b"K1");
     let h2 = sha256_hex(b"K2");
-    let urls = [
-        ("https://cdn.ex/keep1-1.21.11.jar", h1.as_str(), b"K1"),
-        ("https://cdn.ex/keep2-1.21.11.jar", h2.as_str(), b"K2"),
+    let mods: [(&str, Option<&str>); 2] = [
+        ("https://cdn.ex/keep1-1.21.11.jar", Some(h1.as_str())),
+        ("https://cdn.ex/keep2-1.21.11.jar", Some(h2.as_str())),
     ];
-    let mods: Vec<(&str, Option<&str>)> =
-        urls.iter().map(|(u, h, _)| (u, Some(h))).collect();
     let mut http = Fake::default();
+    http.push(make_jar()); // fabric installer
     http.push(b"K1".to_vec());
     http.push(b"K2".to_vec());
     install(
@@ -562,8 +677,9 @@ fn user_mods_installed_together_with_server_mods_in_one_pass() {
     seed(&mc);
     let h_user = sha256_hex(b"USER");
     let mut http = Fake::default();
-    http.push(make_jar()); // server mod unpinned
-    http.push(b"USER".to_vec());
+    http.push(make_jar()); // fabric installer
+    http.push(make_jar()); // server mod (unpinned)
+    http.push(b"USER".to_vec()); // user mod (pinned)
     let summary = install(
         config(
             &[("https://cdn.ex/srv-1.21.11.jar", None)],

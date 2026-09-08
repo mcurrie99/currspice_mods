@@ -3,7 +3,6 @@
 mod common;
 use common::*;
 use currspice_mods::config::{Config, ModRef};
-use proptest::prelude::*;
 
 /// Serializes the tests that switch the process working directory: Rust tests
 /// run in parallel threads inside one test binary, so two tests changing the
@@ -17,12 +16,17 @@ static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[test]
 fn legacy_url_shapes_still_load() {
     // v1 (bare string) and v1.5 (url+sha256) must both remain readable.
-    let yaml = "mc_version: 1.21.11\ninstaller_version: 0.18.4\n\
-                fabric: https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar\n\
-                server_mods:\n\
-                - https://cdn.modrinth.com/data/x/versions/y/a-1.21.11.jar\n\
-                - url: https://cdn.modrinth.com/data/x/versions/y/b-1.21.11.jar\n\
-                  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+    let sha = "a".repeat(64);
+    let yaml = [
+        "mc_version: 1.21.11",
+        "installer_version: 0.18.4",
+        "fabric: https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar",
+        "server_mods:",
+        "  - https://cdn.modrinth.com/data/x/versions/y/a-1.21.11.jar",
+        "  - url: https://cdn.modrinth.com/data/x/versions/y/b-1.21.11.jar",
+    ]
+    .join("\n")
+        + &format!("\n    sha256: {sha}\n");
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("m.yaml");
     std::fs::write(&file, yaml).unwrap();
@@ -47,7 +51,10 @@ fn unknown_top_level_field_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("m.yaml");
     std::fs::write(&file, yaml).unwrap();
-    assert!(Config::load_new(&file).is_err(), "unknown field must not be ignored");
+    assert!(
+        Config::load_new(&file).is_err(),
+        "unknown field must not be ignored"
+    );
 }
 
 #[test]
@@ -75,8 +82,11 @@ fn all_mods_orders_server_before_user() {
         "https://cdn.modrinth.com/data/u/versions/1/user-1.21.11.jar".into(),
         "https://cdn.modrinth.com/data/u2/versions/1/user2-1.21.11.jar".into(),
     ]);
-    let all: Vec<_> = c.all_mods().map(|s| s.clone()).collect();
-    assert_eq!(all.len(), c.get_server_mods().len() + c.get_user_mods().len());
+    let all: Vec<_> = c.all_mods().cloned().collect();
+    assert_eq!(
+        all.len(),
+        c.get_server_mods().len() + c.get_user_mods().len()
+    );
     // Server mods first, then user mods, each in list order.
     for (i, m) in c.get_server_mods().iter().enumerate() {
         assert_eq!(all[i], m.url());
@@ -94,7 +104,10 @@ fn accessor_getters_are_consistent() {
     assert_eq!(c.get_installer_version(), "0.18.4");
     assert_eq!(c.get_path(), "");
     assert!(c.get_fabric_url().starts_with("https://"));
-    assert_eq!(c.mod_refs().count(), c.get_server_mods().len() + c.get_user_mods().len());
+    assert_eq!(
+        c.mod_refs().count(),
+        c.get_server_mods().len() + c.get_user_mods().len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -104,31 +117,50 @@ fn accessor_getters_are_consistent() {
 #[test]
 fn checksum_validation_matrix() {
     // valid
-    for h in ["a".repeat(64).as_str(), "ABCdEF01234567890123456789012345678901234567890123456789012345".as_str()] {
-        let m: ModRef = serde_yaml::from_str(&format!("url: https://host/a.jar\nsha256: {h}")).unwrap();
+    for h in [
+        "a".repeat(64).to_string(),
+        "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789".to_string(),
+    ] {
+        let m: ModRef =
+            serde_yaml::from_str(&format!("url: https://host/a.jar\nsha256: {h}")).unwrap();
         assert!(m.validate().is_ok(), "should accept {h}");
     }
-    // invalid — length, alphabet, whitespace, empty
-    for h in ["", "  ", "abcdef", "a".repeat(63).as_str(), &"a".repeat(65), "non-hex", "aG".repeat(32).as_str()] {
-        let m: ModRef = serde_yaml::from_str(&format!("url: https://host/a.jar\nsha256: {h}")).unwrap();
+    // invalid — wrong length, non-hex, bad alphabet. (An *unquoted empty*
+    // `sha256:` deserializes to `None` = "no recorded hash" = legacy/unpinned,
+    // which is valid; the distinct *quoted-empty* `sha256: ""` case — a hash
+    // that was meant to be present but left empty — is rejected and covered
+    // by `sha256_field_empty_string_is_rejected_not_ignored`.)
+    for h in [
+        "abcdef".to_string(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "non-hex".to_string(),
+        "aG".repeat(32),
+    ] {
+        let m: ModRef =
+            serde_yaml::from_str(&format!("url: https://host/a.jar\nsha256: {h}")).unwrap();
         assert!(m.validate().is_err(), "should reject {h:?}");
     }
 }
 
 #[test]
 fn uppercase_sha256_is_accepted_and_case_insensitive_on_compare() {
-    use currspice_mods::download::Transport; // for the compare below
     use currspice_mods::mods::Mod;
     // Uppercase recorded hash must parse+validate (hex is case-insensitive).
     let upper = "A".repeat(64);
-    let m: ModRef = serde_yaml::from_str(&format!("url: https://host/a.jar\nsha256: {upper}")).unwrap();
+    let m: ModRef =
+        serde_yaml::from_str(&format!("url: https://host/a.jar\nsha256: {upper}")).unwrap();
     assert!(m.validate().is_ok());
-    // Mod::install compares case-insensitively: a lowercase body hash matches.
+    // Mod::install compares case-insensitively: record the real digest in
+    // UPPERCASE and the lowercase-body match must still install.
+    use currspice_mods::mods::sha256_hex;
     let dir = tempfile::tempdir().unwrap();
     let mut mod_ = Mod::new("https://host/a.jar", dir.path()).unwrap();
     let body = b"payload";
+    let recorded = sha256_hex(body).to_uppercase();
+    assert_eq!(recorded, recorded.to_uppercase()); // sanity: it is uppercase
     let mut t = Scripted::new(vec![body.to_vec()]);
-    let outcome = mod_.install(Some(&upper), &mut t).unwrap();
+    let outcome = mod_.install(Some(&recorded), &mut t).unwrap();
     assert_eq!(outcome, currspice_mods::download::Outcome::Installed);
     assert_eq!(std::fs::read(mod_.path()).unwrap(), body);
 }
@@ -182,18 +214,29 @@ fn drift_catch_matrix() {
         // different series (minor): conflict
         ("1.21.11", "https://x/mod-1.20.1.jar", false), // different series — can't disprove
         // non-MC-versioned jar (Kotlin): can't disprove → ok
-        ("1.21.11", "https://x/fabric-language-kotlin-1.13.8.jar", false),
+        (
+            "1.21.11",
+            "https://x/fabric-language-kotlin-1.13.8.jar",
+            false,
+        ),
         // substring trap: "1.21.1" is a substring of "1.21.11" — NOT a conflict
         ("1.21.11", "https://x/sodium-0.8.2%2Bmc1.21.11.jar", false),
         // build number embedded in a different form
         ("1.21.11", "https://x/mod-mc1.21.11.jar", false),
         // truly different version in a query/other path segment
-        ("1.21.11", "https://x/data/y/versions/aaa/mod-1.21.8.jar", true),
+        (
+            "1.21.11",
+            "https://x/data/y/versions/aaa/mod-1.21.8.jar",
+            true,
+        ),
     ];
     for (mc, url, expect) in cases {
         let cfg = cfg_with(mc, &[url]);
         let got = cfg.verify_version_consistency().is_err();
-        assert_eq!(got, expect, "drift({mc}, {url}) got={got} expected={expect}");
+        assert_eq!(
+            got, expect,
+            "drift({mc}, {url}) got={got} expected={expect}"
+        );
     }
 }
 
@@ -204,9 +247,18 @@ fn drift_error_names_the_offender_and_declared_version() {
         &["https://cdn.modrinth.com/data/P7dR8mSH/versions/L34yYPTD/thing-0.141.2%2B1.21.11.jar"],
     );
     let err = cfg.verify_version_consistency().unwrap_err().to_string();
-    assert!(err.contains("1.21.11"), "should name the offending version: {err}");
-    assert!(err.contains("1.21.1"), "should name the declared version: {err}");
-    assert!(err.to_lowercase().contains("manifest"), "should point at the manifest: {err}");
+    assert!(
+        err.contains("1.21.11"),
+        "should name the offending version: {err}"
+    );
+    assert!(
+        err.contains("1.21.1"),
+        "should name the declared version: {err}"
+    );
+    assert!(
+        err.to_lowercase().contains("manifest"),
+        "should point at the manifest: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +315,15 @@ fn invalid_cwd_errors_and_never_falls_back() {
 fn write_yaml(path: &std::path::Path, mc: &str) {
     std::fs::write(
         path,
-        yaml_manifest(mc, "0.18.4", "https://maven.fabricmc.net/x.jar", &[&format!("https://cdn.modrinth.com/data/x/versions/y/a-{mc}.jar")], &[]),
+        yaml_manifest(
+            mc,
+            "0.18.4",
+            "https://maven.fabricmc.net/x.jar",
+            &[&format!(
+                "https://cdn.modrinth.com/data/x/versions/y/a-{mc}.jar"
+            )],
+            &[],
+        ),
     )
     .unwrap();
 }
@@ -291,9 +351,7 @@ fn gen_config_file_creates_parent_dir() {
     let dir = tempfile::tempdir().unwrap();
     let nested = dir.path().join("a/b/c/out.yaml");
     assert!(!nested.parent().unwrap().exists());
-    valid_config()
-        .gen_config_file(&nested)
-        .unwrap();
+    valid_config().gen_config_file(&nested).unwrap();
     assert!(nested.exists());
     assert!(Config::load_new(&nested).is_ok());
 }
@@ -321,13 +379,22 @@ fn profile_edit_sets_heap_icon_and_keeps_unrelated_profiles() {
     c.set_path(dir.path().to_string_lossy().to_string());
     c.edit_profile_at(&p, 6).unwrap();
 
-    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
     let fabric = &doc["profiles"]["fabric-loader-1.21.11"];
     assert!(fabric["javaArgs"].as_str().unwrap().contains("-Xmx6G"));
     assert_eq!(fabric["name"], currspice_mods::PROFILE_NAME);
-    assert!(fabric["icon"].as_str().unwrap().starts_with("data:image/png;base64,"));
+    assert!(
+        fabric["icon"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
     // Unrelated profile fully intact.
-    assert_eq!(doc["profiles"]["My Other Modpack"]["lastVersionId"], "vanilla-1.21.11");
+    assert_eq!(
+        doc["profiles"]["My Other Modpack"]["lastVersionId"],
+        "vanilla-1.21.11"
+    );
 }
 
 #[test]
@@ -339,10 +406,14 @@ fn profile_edit_missing_fabric_profile_does_not_create_it() {
     std::fs::write(&p, "{\"profiles\":{\"unrelated\":{}}}").unwrap();
     let c = valid_config();
     let err = c.edit_profile_at(&p, 8).unwrap_err().to_string();
-    assert!(err.contains("fabric-loader-1.21.11"), "must name the missing profile: {err}");
+    assert!(
+        err.contains("fabric-loader-1.21.11"),
+        "must name the missing profile: {err}"
+    );
     // File must still be valid JSON and unchanged in shape.
-    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
-    assert!(!doc["profiles"].get("fabric-loader-1.21.11").is_some());
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    assert!(doc["profiles"].get("fabric-loader-1.21.11").is_none());
 }
 
 #[test]
@@ -363,10 +434,18 @@ fn profile_edit_is_idempotent_second_run_is_safe() {
     c.edit_profile_at(&p, 4).unwrap();
     let mid = std::fs::read_to_string(&p).unwrap();
     c.edit_profile_at(&p, 8).unwrap(); // different heap on re-run
-    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
-    assert!(doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"].as_str().unwrap().contains("-Xmx8G"));
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    assert!(
+        doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"]
+            .as_str()
+            .unwrap()
+            .contains("-Xmx8G")
+    );
     // Exactly one javaArgs value, no duplicated flags piled up.
-    let args = doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"].as_str().unwrap();
+    let args = doc["profiles"]["fabric-loader-1.21.11"]["javaArgs"]
+        .as_str()
+        .unwrap();
     assert_eq!(args.matches("-Xmx").count(), 1, "no Xmx pile-up: {args}");
     let _ = mid;
 }
@@ -387,12 +466,18 @@ fn profile_preserves_custom_javaargs_but_replaces_xmx() {
     std::fs::write(&p, doc.to_string()).unwrap();
     let c = valid_config();
     c.edit_profile_at(&p, 16).unwrap();
-    let out: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
-    let args = out["profiles"]["fabric-loader-1.21.11"]["javaArgs"].as_str().unwrap();
+    let out: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let args = out["profiles"]["fabric-loader-1.21.11"]["javaArgs"]
+        .as_str()
+        .unwrap();
     assert!(args.contains("-Xmx16G"), "heap updated: {args}");
     assert!(!args.contains("-Xmx1G"), "old heap gone: {args}");
     assert!(args.contains("-XX:+UseG1GC"), "custom flag kept: {args}");
-    assert!(args.contains("-Dcom.mojang.eula.agree=true"), "custom flag kept: {args}");
+    assert!(
+        args.contains("-Dcom.mojang.eula.agree=true"),
+        "custom flag kept: {args}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -416,48 +501,52 @@ fn build_java_args_edge_matrix() {
 // Property: version-conflict detector agrees with itself across many inputs
 // ---------------------------------------------------------------------------
 
-#[proptest::proptest]
-fn drift_detector_is_deterministic_for_identical_input(patch in 0u8..256) {
-    let base = 10u16 + (patch as u16) % 50; // e.g. 10..=59
-    let declared = 10u16 + (patch as u16 % 50) % 50;
-    let url = format!("https://cdn.example/data/m/versions/v/mod-{declared}.{base}.jar");
-    // Consistency: the detector is a pure function of its input — re-running
-    // is bit-identical. (Correctness per case is locked by the
-    // `drift_catch_matrix` table above; this just guards against hidden
-    // state/nondeterminism in the implementation.)
-    let cfg = cfg_with(&format!("1.{declared}"), &[&url]);
-    let a = cfg.verify_version_consistency().is_err();
-    let b = cfg.verify_version_consistency().is_err();
-    prop_assert_eq!(a, b, "detector must be deterministic for {url}");
+#[test]
+fn drift_detector_is_deterministic_for_identical_input() {
+    // Sweep a handful of representative inputs: the detector must be a
+    // pure function of its input — a second call on the same Config is
+    // bit-identical.  (Per-case correctness lives in `drift_catch_matrix`.)
+    for patch in 0..=4u16 {
+        let base = 10u16 + patch % 50;
+        let declared = 10u16 + patch;
+        let url = format!("https://cdn.example/data/m/versions/v/mod-{declared}.{base}.jar");
+        let cfg = cfg_with(&format!("1.{declared}"), &[&url]);
+        let a = cfg.verify_version_consistency().is_err();
+        let b = cfg.verify_version_consistency().is_err();
+        let _ = url;
+        assert_eq!(a, b, "detector must be deterministic");
+    }
 }
 
-#[proptest::proptest]
-fn accepted_mod_url_yields_a_safe_single_component_name(
-    name in proptest::strategy::prop_oneof![
+#[test]
+fn accepted_mod_url_yields_a_safe_single_component_name() {
+    let names = [
         "alpha_beta-gamma.deltahash",
         "Sodium-0.8.2%2Bmc1.21.11",
         "a.b.c.d",
         "lowercase_thing",
         "unicode_%C3%A9_name",
-    ],
-) {
-    let url = format!("https://host.example/data/obj/versions/x/{name}.jar");
-    let dir = std::path::Path::new("C:/mods");
-    match currspice_mods::mods::Mod::new(&url, dir) {
-        Ok(m) => {
-            let n = m.get_name();
-            prop_assert!(!n.contains('/'), "{n}");
-            prop_assert!(!n.contains('\\'), "{n}");
-            prop_assert!(!n.contains(':'), "{n}");
-            prop_assert!(n.ends_with(".jar"), "{n}");
-            // and it lands directly under the mods dir
-            prop_assert!(
-                m.path().parent().map(|p| p == dir).unwrap_or(false),
-                "{} escapes {}",
-                m.path().display(),
-                dir.display()
-            );
+    ];
+    for name in names {
+        let url = format!("https://host.example/data/obj/versions/x/{name}.jar");
+        let dir = std::path::Path::new("C:/mods");
+        #[allow(clippy::single_match)] // accept vs reject are semantically distinct
+        match currspice_mods::mods::Mod::new(&url, dir) {
+            Ok(m) => {
+                let n = m.get_name();
+                assert!(!n.contains('/'), "{n}");
+                assert!(!n.contains('\\'), "{n}");
+                assert!(!n.contains(':'), "{n}");
+                assert!(n.ends_with(".jar"), "{n}");
+                // and it lands directly under the mods dir
+                assert!(
+                    m.path().parent().map(|p| p == dir).unwrap_or(false),
+                    "{} escapes {}",
+                    m.path().display(),
+                    dir.display()
+                );
+            }
+            Err(_) => {} // rejected = also fine, nothing to prove about the path
         }
-        Err(_) => {} // rejected = also fine, nothing to prove about the path
     }
 }

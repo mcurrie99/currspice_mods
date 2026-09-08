@@ -3,16 +3,18 @@
 //! and the HTTPS-only transport contract.
 mod common;
 use common::*;
-use currspice_mods::download::{file_sha256, valid_jar, InstallError, Outcome, Transport};
+use currspice_mods::download::{Outcome, Transport, file_sha256, valid_jar};
 use currspice_mods::mods::Mod;
-use std::io::Write;
 
-fn fetch_bytes(t: &currspice_mods::download::HttpTransport, url: &str) -> std::io::Result<Vec<u8>> {
+fn fetch_bytes(
+    t: &mut currspice_mods::download::HttpTransport,
+    url: &str,
+) -> std::io::Result<Vec<u8>> {
     let mut sink: Vec<u8> = Vec::new();
     let res = t.fetch(url, &mut sink);
     match res {
         Ok(()) => Ok(sink),
-        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+        Err(e) => Err(std::io::Error::other(e.to_string())),
     }
 }
 use std::path::Path;
@@ -54,13 +56,13 @@ fn file_sha256_streams_large_files_without_oom() {
     let p = dir.path().join("big.bin");
     std::fs::write(&p, &big).unwrap();
     let streamed = file_sha256(&p).unwrap();
-    let mut ref_hash = <sha2::Sha256 as sha2::Digest>::new();
     {
-        use sha2::Digest;
+        use sha2::{Digest, Sha256};
+        let mut ref_hash = Sha256::new();
         ref_hash.update(&big);
+        let expected = format!("{:x}", ref_hash.finalize());
+        assert_eq!(streamed, expected);
     }
-    let expected = format!("{:x}", ref_hash.finalize());
-    assert_eq!(streamed, expected);
 }
 
 #[test]
@@ -98,8 +100,8 @@ fn valid_jar_rejects_empty_archive() {
     // An archive with zero entries is structurally "valid" as a zip but is
     // not a usable jar — the function must say no.
     let dir = tempfile::tempdir().unwrap();
-    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let empty = w.finish().unwrap();
+    let w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let empty = w.finish().unwrap().into_inner();
     let p = dir.path().join("empty.jar");
     std::fs::write(&p, &empty).unwrap();
     assert!(!valid_jar(&p));
@@ -133,7 +135,10 @@ fn install_uses_expected_hash_case_insensitively() {
     let hash_upper = currspice_mods::mods::sha256_hex(body).to_uppercase();
     let mut m = fresh_mod(dir.path());
     let mut t = Scripted::new(vec![body.to_vec()]);
-    assert_eq!(m.install(Some(&hash_upper), &mut t).unwrap(), Outcome::Installed);
+    assert_eq!(
+        m.install(Some(&hash_upper), &mut t).unwrap(),
+        Outcome::Installed
+    );
 }
 
 #[test]
@@ -146,7 +151,11 @@ fn skip_on_checksum_match_no_redownload() {
     let mut m = fresh_mod(dir.path());
     let mut t = Scripted::new(Vec::new());
     assert_eq!(m.install(Some(&hash), &mut t).unwrap(), Outcome::Skipped);
-    assert_eq!(t.calls.len(), 0, "a matched existing file must not trigger a fetch");
+    assert_eq!(
+        t.calls.len(),
+        0,
+        "a matched existing file must not trigger a fetch"
+    );
 }
 
 #[test]
@@ -193,7 +202,11 @@ fn checksum_retry_then_success_preserves_idempotent_outcome() {
     let mut m = fresh_mod(dir.path());
     let mut t = Scripted::new(vec![b"transient-bad".to_vec(), body.to_vec()]);
     assert_eq!(m.install(Some(&hash), &mut t).unwrap(), Outcome::Installed);
-    assert_eq!(t.calls.len(), 2, "failed first attempt consumed, then success");
+    assert_eq!(
+        t.calls.len(),
+        2,
+        "failed first attempt consumed, then success"
+    );
     assert_eq!(std::fs::read(m.path()).unwrap(), body);
 }
 
@@ -230,7 +243,10 @@ fn unpinned_downloaded_not_a_jar_fails_without_publishing() {
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
-    assert!(leftovers.is_empty(), "no staging leftovers allowed: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "no staging leftovers allowed: {leftovers:?}"
+    );
 }
 
 #[test]
@@ -243,15 +259,28 @@ fn empty_download_is_rejected_even_with_matching_hash() {
     let mut m = fresh_mod(dir.path());
     let mut t = Scripted::new(vec![Vec::new()]);
     let err = m.install(Some(&empty_hash), &mut t).unwrap_err();
-    assert_eq!(err.exit_code(), 4, "an empty download is a Verify-class failure");
-    assert!(err.to_string().contains("Empty"), "should explain the empty body: {err}");
-    assert!(!m.path().exists(), "an empty body must not be published as a file");
+    assert_eq!(
+        err.exit_code(),
+        4,
+        "an empty download is a Verify-class failure"
+    );
+    assert!(
+        err.to_string().contains("Empty"),
+        "should explain the empty body: {err}"
+    );
+    assert!(
+        !m.path().exists(),
+        "an empty body must not be published as a file"
+    );
     let leftovers: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
-    assert!(leftovers.is_empty(), "no staging leftovers allowed: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "no staging leftovers allowed: {leftovers:?}"
+    );
 }
 
 #[test]
@@ -265,7 +294,11 @@ fn transport_failure_mid_fetch_leaves_no_partial_publish() {
     t.fail_next("connection reset");
     let err = m.install(Some(&hash), &mut t).unwrap_err();
     assert_eq!(err.exit_code(), 2, "a transport failure is a Network error");
-    assert_eq!(std::fs::read(m.path()).unwrap(), prior, "prior file preserved");
+    assert_eq!(
+        std::fs::read(m.path()).unwrap(),
+        prior,
+        "prior file preserved"
+    );
 }
 
 #[test]
@@ -290,8 +323,15 @@ fn install_rejects_invalid_recorded_hash_before_any_write() {
     let mut m = fresh_mod(dir.path());
     let mut t = Scripted::new(Vec::new());
     let err = m.install(Some("not-a-valid-hash"), &mut t).unwrap_err();
-    assert_eq!(err.exit_code(), 1, "a malformed recorded hash is a config-level error");
-    assert!(t.calls.is_empty(), "must not fetch before validating the hash");
+    assert_eq!(
+        err.exit_code(),
+        1,
+        "a malformed recorded hash is a config-level error"
+    );
+    assert!(
+        t.calls.is_empty(),
+        "must not fetch before validating the hash"
+    );
     assert!(!m.path().exists());
 }
 
@@ -304,24 +344,23 @@ fn production_transport_refuses_plain_http() {
     // The *production* client is constructed with `https_only(true)` — a
     // `http://` URL must be rejected by the client itself and classified as a
     // Network error, with no bytes delivered.
-    let t = currspice_mods::download::HttpTransport::new().unwrap();
-    let res = fetch_bytes(&t, "http://127.0.0.1:1/anything");
-    match res {
-        Ok(bytes) => panic!("a plain-HTTP URL must not succeed, got {bytes:?} bytes"),
-        Err(_) => {} // expected: the client rejects non-https schemes
-    }
+    let mut t = currspice_mods::download::HttpTransport::new().unwrap();
+    let res = fetch_bytes(&mut t, "http://127.0.0.1:1/anything");
+    if let Ok(bytes) = res {
+        panic!("a plain-HTTP URL must not succeed, got {bytes:?} bytes");
+    } // expected: the client rejects non-https schemes
 }
 
 #[test]
 fn production_transport_refjects_non_https_scheme_variants() {
-    let t = currspice_mods::download::HttpTransport::new().unwrap();
+    let mut t = currspice_mods::download::HttpTransport::new().unwrap();
     // ftp/file are rejected by scheme before any I/O; http is rejected by the
     // https_only guard. In all cases no body may be produced.
-    for url in [
-        "ftp://127.0.0.1:1/x.jar",
-        "file:///C:/nope/x.jar",
-    ] {
-        let res = fetch_bytes(&t, url).err();
-        assert!(res.is_some(), "{url} must not be accepted by the https-only client");
+    for url in ["ftp://127.0.0.1:1/x.jar", "file:///C:/nope/x.jar"] {
+        let res = fetch_bytes(&mut t, url).err();
+        assert!(
+            res.is_some(),
+            "{url} must not be accepted by the https-only client"
+        );
     }
 }
