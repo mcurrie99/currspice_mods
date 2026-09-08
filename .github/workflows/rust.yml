@@ -18,8 +18,8 @@ jobs:
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
-    - name: Install Rust (stable, with clippy & rustfmt)
-      run: rustup component add clippy rustfmt --profile minimal
+    - name: Install clippy and rustfmt (already present on the runner image; just pin them)
+      run: rustup component add clippy rustfmt
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2
       with:
