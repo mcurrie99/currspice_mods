@@ -66,6 +66,11 @@ jobs:
       run: |
         New-Item -ItemType Directory -Force -Path dist | Out-Null
         Copy-Item target/release/currspice_mods.exe dist/currspice_mods-windows-x86_64.exe
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Smoke-test the packaged executable
+      run: python scripts/smoke_release.py dist/currspice_mods-windows-x86_64.exe
     - name: Upload installer
       uses: actions/upload-artifact@v4
       with:

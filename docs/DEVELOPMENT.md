@@ -160,6 +160,22 @@ an actual backend; do not invent one while implementing the parser.
 
 Do not guess these values or implement backup/restore against a fictional host.
 
+## Packaged release smoke test
+
+Run `python scripts/smoke_release.py target/release/currspice_mods.exe`
+after `cargo build --locked --release`. Python 3.11+ and no third-party
+packages are needed. The script launches the actual binary from a temporary
+working directory without a local manifest. It checks help, embedded-manifest
+dry-run with a Minecraft path containing spaces, missing explicit config
+(exit 1), and unchanged fixture contents after every invocation. Each child
+has a 30-second timeout. This is not a real Fabric/game install or proof of
+network isolation. CI runs it against the renamed packaged Windows executable
+before uploading that artifact.
+
+PRs target `dev` for review; `main` remains the release branch. Do not move
+`dev` to an unreviewed PR head or merge on the owner's behalf. An open PR and
+passing checks do not themselves enforce branch protection.
+
 ## Verification record
 
 This section is updated after the implementation and independent checks finish.
