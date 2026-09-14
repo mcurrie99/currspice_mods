@@ -2,40 +2,75 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev", "hermes-*" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "dev", "hermes-*" ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Fast, cross-platform signal on every push/PR: builds and runs the full
-  # test suite. Everything in the crate is written to pass on either OS.
-  test:
+  # ─── 1. Fast lint gate (format + clippy) ──────────────────────────────────
+  # Runs before tests so style and lint errors surface in <30s.
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+    - name: Install clippy and rustfmt (already present on the runner image; just pin them)
+      run: rustup component add clippy rustfmt
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: lint
+    - name: cargo fmt --check
+      run: cargo fmt --check
+    - name: cargo clippy --all-targets
+      run: cargo clippy --all-targets -- -D warnings
 
-  # Produce the artifact friends actually download: a Windows release .exe.
-  # Building on a real Windows runner sidesteps the winres/MSVC cross-compile
-  # path entirely.
-  windows-build:
-    runs-on: windows-latest
+  # ─── 2. Linux test suite (fast, no Java needed) ──────────────────────────
+  test-linux:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: test
+    - name: Run tests
+      run: cargo test --no-fail-fast --verbose
+
+  # ─── 3. Windows build (the artifact friends download) + Windows tests ────
+  # Real Windows runner avoids the winres/MSVC cross-compile path entirely,
+  # and exercises the Java.exe / .exe path-naming branches the Linux suite
+  # can't reach.
+  windows:
+    needs: lint
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: windows
     - name: Build (release)
       run: cargo build --release
-    - name: Run tests
-      run: cargo test --release
+    - name: Tests (release)
+      run: cargo test --release --no-fail-fast
     - name: Package the installer
+      shell: pwsh
       run: |
         New-Item -ItemType Directory -Force -Path dist | Out-Null
         Copy-Item target/release/currspice_mods.exe dist/currspice_mods-windows-x86_64.exe
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Smoke-test the packaged executable
+      run: python scripts/smoke_release.py dist/currspice_mods-windows-x86_64.exe
     - name: Upload installer
       uses: actions/upload-artifact@v4
       with:

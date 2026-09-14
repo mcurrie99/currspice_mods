@@ -50,6 +50,9 @@ pub struct HttpTransport {
     client: reqwest::blocking::Client,
 }
 impl HttpTransport {
+    /// Production default: HTTPS-only, bounded timeouts. This is the only
+    /// client the installer ever constructs — plain HTTP is rejected by the
+    /// client itself (locked down by `mod transport_rejects_plain_http`).
     pub fn new() -> Result<Self, InstallError> {
         let client = reqwest::blocking::Client::builder()
             .https_only(true)

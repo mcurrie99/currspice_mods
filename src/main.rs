@@ -94,14 +94,12 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
     //    (embedded at build time — the manifest host is not in this path).
     //    A missing or invalid manifest is a config error; it never silently
     //    becomes a different catalog (ROADMAP P1, Phase 1).
-    let config = Config::select(cli.config.as_deref(), &cwd).map_err(|e| {
-        (
-            EXIT_CONFIG,
-            format!("could not load the mod manifest: {e}"),
-        )
-    })?;
+    let config = Config::select(cli.config.as_deref(), &cwd)
+        .map_err(|e| (EXIT_CONFIG, format!("could not load the mod manifest: {e}")))?;
     // Phase-0 drift guard: one MC version, all mods must target it.
-    config.verify_version_consistency().map_err(|e| (EXIT_CONFIG, e.to_string()))?;
+    config
+        .verify_version_consistency()
+        .map_err(|e| (EXIT_CONFIG, e.to_string()))?;
     println!(
         "Currspice: manifest OK — Minecraft {}, {} — {}",
         config.get_mc_version(),
@@ -147,9 +145,8 @@ fn run(cli: &Cli) -> Result<String, (i32, String)> {
         verbose: cli.verbose,
         heap_gb: determine_ram_alloc(2.0),
     };
-    let mut transport = HttpTransport::new().map_err(|e| {
-        (EXIT_NETWORK, format!("could not prepare downloads: {e}"))
-    })?;
+    let mut transport = HttpTransport::new()
+        .map_err(|e| (EXIT_NETWORK, format!("could not prepare downloads: {e}")))?;
     let summary = install(config, &options, &mut transport, &mut SystemRuntime)
         .map_err(|e| (e.exit_code(), e.to_string()))?;
     Ok(summary)
@@ -165,4 +162,3 @@ fn manifest_source(explicit: Option<&Path>, cwd: &Path) -> String {
         String::from("built-in catalog (embedded in this installer release)")
     }
 }
-

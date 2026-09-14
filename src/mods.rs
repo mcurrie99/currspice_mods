@@ -101,12 +101,13 @@ impl Mod {
     ) -> Result<crate::download::Outcome, crate::download::InstallError> {
         use crate::download::{InstallError, Outcome, file_sha256};
         if let Some(hash) = expected
-            && (hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())) {
-                return Err(InstallError::Config(format!(
-                    "Invalid SHA-256 for {}",
-                    self.name
-                )));
-            }
+            && (hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(InstallError::Config(format!(
+                "Invalid SHA-256 for {}",
+                self.name
+            )));
+        }
         let existed = self.path.try_exists()?;
         if existed && self.path.is_file() {
             if let Some(hash) = expected {

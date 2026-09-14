@@ -54,7 +54,7 @@ impl ModRef {
             let ok = h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit());
             if !ok {
                 return Err(format!(
-                    "config: the sha256 for {} is not a 64-character hex digest ({} chars — expected a 64-char lowercase hex string)",
+                    "config: the sha256 for {} is not a 64-character hex digest ({} chars — expected exactly 64 hex characters)",
                     self.url(),
                     h.chars().count()
                 )
@@ -66,6 +66,7 @@ impl ModRef {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Path to the player's Minecraft installation. Filled in at runtime by
     /// the installer; the manifest itself doesn't pin it (see the
@@ -209,9 +210,10 @@ impl Config {
         let response = reqwest::blocking::get(link)?;
         let content = response.bytes()?;
         if let Some(parent) = filepath.parent()
-            && !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(filepath, &content)?;
         Self::load_new(filepath)
     }
@@ -275,6 +277,9 @@ impl Config {
     /// Serialize this config back out to YAML (used by tests and, later,
     /// the dashboard's "personal manifest" endpoint).
     pub fn gen_config_file(&self, filename: &Path) -> Result<(), Box<dyn Error>> {
+        if let Some(parent) = filename.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
         let file = File::create(filename)?;
         serde_yaml::to_writer(file, self)?;
         Ok(())

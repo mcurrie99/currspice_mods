@@ -91,7 +91,9 @@ pub fn probe_java(bin: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn accepts_java_output(success: bool, stdout: &str, stderr: &str) -> bool {
+/// Exposed for tests (driven via `tests/jre_ext.rs`). Returns true iff the
+/// parsed version string names Java 17 or newer.
+pub fn accepts_java_output(success: bool, stdout: &str, stderr: &str) -> bool {
     success
         && stderr.lines().chain(stdout.lines()).any(|line| {
             let mut words = line.split_whitespace();
@@ -109,7 +111,8 @@ fn accepts_java_output(success: bool, stdout: &str, stderr: &str) -> bool {
         })
 }
 
-fn java_bin_name() -> &'static str {
+/// The platform Java executable name (`java` or `java.exe`).
+pub fn java_bin_name() -> &'static str {
     if cfg!(windows) { "java.exe" } else { "java" }
 }
 
@@ -133,7 +136,9 @@ pub fn ensure_java(allow_download: bool) -> Result<PathBuf, Box<dyn Error>> {
     )
 }
 
-fn ensure_java_with(
+/// Injected seam for the resolution order so tests can drive every branch
+/// without a real `java` or network (see `tests/jre_ext.rs`).
+pub fn ensure_java_with(
     allow_download: bool,
     home: &Path,
     java_home: Option<&Path>,
@@ -184,7 +189,10 @@ fn download_archive() -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(body)
 }
 
-fn install_jre_with(
+/// Core download/extract/relocate flow, exposed so tests can inject the
+/// probe and download (see `tests/jre_ext.rs`) and unit-test the risky
+/// cache-replacement logic without a 40 MB network fetch.
+pub fn install_jre_with(
     home: &Path,
     os: &str,
     arch: &str,
@@ -192,9 +200,10 @@ fn install_jre_with(
     mut download: impl FnMut() -> Result<Vec<u8>, Box<dyn Error>>,
 ) -> Result<PathBuf, Box<dyn Error>> {
     if let Some(java) = cached_java(home)
-        && probe_java(&java) {
-            return Ok(java);
-        }
+        && probe_java(&java)
+    {
+        return Ok(java);
+    }
     if os != "windows" || arch != "x86_64" {
         return Err("Private Java provisioning supports Windows x64 only; install Java 17+ on PATH or set JAVA_HOME.".into());
     }
